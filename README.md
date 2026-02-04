@@ -2,8 +2,12 @@
 
 [![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
+[![Status](https://img.shields.io/badge/Status-Active_Research-yellow.svg?style=for-the-badge)]()
 
+
+## Spring 2026 Extension
+
+The current Dual-CNMP implementation serves as the baseline. The next phase of research focuses on introducing: Diffusion Models and Transformer Architectures.
 
 ## Project Overview
 
@@ -21,7 +25,7 @@ Key contributions include a custom **end-to-end data pipeline** for multimodal s
 ## Architecture & Methodology
 
 ### 1. The Dual-CNMP Model
-We utilize a Dual-Encoder architecture that maps sensorimotor trajectories into a shared latent space.
+This implementation utilizes a Dual-Encoder architecture that maps sensorimotor trajectories into a shared latent space.
 * **Encoder A (Forward):** Encodes the `Insert` trajectory.
 * **Encoder B (Inverse):** Encodes the `Place` trajectory.
 * **Shared Latent Space:** By forcing manifold alignment between these tasks, the model learns the semantic relationship between "Insert" and "Place" independent of the object identity.
@@ -46,7 +50,7 @@ We utilize a Dual-Encoder architecture that maps sensorimotor trajectories into 
 
 ## Results
 
-We evaluated the model using a **Rigorous Geometric Success Criterion** based on a Dual-Point Constraint. A generated trajectory is considered successful only if it satisfies **both** conditions simultaneously:
+The model is evaluated using a **Rigorous Geometric Success Criterion** based on a Dual-Point Constraint. A generated trajectory is considered successful only if it satisfies **both** conditions simultaneously:
 1.  **Start Point Accuracy:** The trajectory must initiate from the correct socket location (verifying the model recognized the object context).
 2.  **End Point Convergence:** The trajectory must converge to the table origin (verifying the model learned the "return-to-start" logic).
 
