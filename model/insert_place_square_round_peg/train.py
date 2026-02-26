@@ -21,7 +21,7 @@ from tqdm import tqdm
 from torch.optim.lr_scheduler import LambdaLR
 import time
 
-def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_max, d_x, d_y1, d_y2, d_param, time_len, validation_indices, training_indices, save_folder, run_id, unpaired_traj=True):
+def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_max, d_x, d_y1, d_y2, d_param, time_len, validation_indices, training_indices, save_folder, run_id, device, unpaired_traj=True):
 
     os.makedirs(f'model/insert_place_square_round_peg/logs/run_{run_id}/', exist_ok=True)
     sys.stdout = open(f'model/insert_place_square_round_peg/logs/run_{run_id}/train_log.txt', 'w')
@@ -46,7 +46,7 @@ def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_ma
         obs, params, mask, x_tar, y_tar_f, y_tar_i, extra_pass = dual_enc_dec_cnmp.get_training_sample(
             extra_pass, valid_inverses, validation_indices, demo_data, 
             obs_max, d_N, d_x, d_y1, d_y2, d_param, time_len, 
-            batch_size=BATCH_SIZE
+            batch_size=BATCH_SIZE, device=device
         )
         
         optimizer.zero_grad()
@@ -61,11 +61,11 @@ def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_ma
         scheduler.step()
 
         if i > 0 and i % 1000 == 0:
-            epoch_train_error = validate_model.val_only_extra(model, training_indices, i, demo_data, d_x, d_y1, d_y2, time_len=time_len)
-            training_errors.append(epoch_train_error)
+            epoch_train_error = validate_model.val_only_extra(model, training_indices, i, demo_data, d_x, d_y1, d_y2, time_len=time_len, device=device)
+            training_errors.append(epoch_train_error if isinstance(epoch_train_error, (int, float)) else epoch_train_error.item())
 
-            epoch_val_error = validate_model.val_only_extra(model, validation_indices, i, demo_data, d_x, d_y1, d_y2, time_len=time_len)
-            validation_errors.append(epoch_val_error)
+            epoch_val_error = validate_model.val_only_extra(model, validation_indices, i, demo_data, d_x, d_y1, d_y2, time_len=time_len, device=device)
+            validation_errors.append(epoch_val_error if isinstance(epoch_val_error, (int, float)) else epoch_val_error.item())
             
             losses.append(loss.item())
 
@@ -84,6 +84,12 @@ def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_ma
 
 if __name__ == "__main__":
     utils.seed_everything(42)
+
+    # --- DEVICE CONFIGURATION ---
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
 
     # --- CONFIGURATION ---
     base_data_folder = "data/paired_trajectories_insert_place"
@@ -165,9 +171,9 @@ if __name__ == "__main__":
         all_valid_inverses.extend([is_paired] * num_loaded)
 
     # --- AGGREGATE ---
-    Y1 = torch.tensor(np.concatenate(all_Y1_list, axis=0), dtype=torch.float32)
-    Y2 = torch.tensor(np.concatenate(all_Y2_list, axis=0), dtype=torch.float32)
-    C = torch.tensor(np.concatenate(all_C_list, axis=0), dtype=torch.float32)
+    Y1 = torch.tensor(np.concatenate(all_Y1_list, axis=0), dtype=torch.float32).to(device)
+    Y2 = torch.tensor(np.concatenate(all_Y2_list, axis=0), dtype=torch.float32).to(device)
+    C = torch.tensor(np.concatenate(all_C_list, axis=0), dtype=torch.float32).to(device)
 
     # Convert valid_inverses to a simple boolean list (used by get_training_sample)
     valid_inverses = all_valid_inverses
@@ -219,8 +225,8 @@ if __name__ == "__main__":
     time_len = Y1.shape[1]
 
     # Create Time inputs (X)
-    X1 = torch.linspace(0, 1, time_len).repeat(num_demo, 1).reshape(num_demo, -1, 1)
-    X2 = torch.linspace(0, 1, time_len).repeat(num_demo, 1).reshape(num_demo, -1, 1)
+    X1 = torch.linspace(0, 1, time_len).repeat(num_demo, 1).reshape(num_demo, -1, 1).to(device)
+    X2 = torch.linspace(0, 1, time_len).repeat(num_demo, 1).reshape(num_demo, -1, 1).to(device)
 
     d_x = 1
     d_param = C.shape[1] 
@@ -245,19 +251,21 @@ if __name__ == "__main__":
     # Save Normalization Constants for Inference
     print("Saving Normalization Stats...")
     np.save(f'{save_folder}/run_{run_id}/normalization_stats.npy', {
-        'Y_min': Y_min_vals, 'Y_max': Y_max_vals,
-        'C_min': C_min_val, 'C_max': C_max_val
+        'Y_min': [v.cpu() if torch.is_tensor(v) else v for v in Y_min_vals],
+        'Y_max': [v.cpu() if torch.is_tensor(v) else v for v in Y_max_vals],
+        'C_min': C_min_val.cpu() if torch.is_tensor(C_min_val) else C_min_val,
+        'C_max': C_max_val.cpu() if torch.is_tensor(C_max_val) else C_max_val
     })
 
     EPOCHS = 60_001
     learning_rate = 3e-4
     
-    model = dual_enc_dec_cnmp.DualEncoderDecoder(d_x, d_y1, d_y2, d_param, dropout_p=[0.0, 0.0])
+    model = dual_enc_dec_cnmp.DualEncoderDecoder(d_x, d_y1, d_y2, d_param, dropout_p=[0.0, 0.0]).to(device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)
     scheduler = LambdaLR(optimizer, lr_lambda=lambda epoch: 1 if epoch < 40_000 else 5e-1)
 
     training_errors, validation_errors, losses = train(
         model, optimizer, scheduler, EPOCHS, 
         valid_inverses, demo_data, OBS_MAX, d_x, d_y1, d_y2, d_param, time_len,
-        validation_indices, training_indices, save_folder, run_id, unpaired_traj=True
+        validation_indices, training_indices, save_folder, run_id, device, unpaired_traj=True
     )

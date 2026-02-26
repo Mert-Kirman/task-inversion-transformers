@@ -51,7 +51,7 @@ import model.utils as utils
 import model.model_predict as model_predict
 
 def val_only_extra(model, validation_indices, epoch_count, demo_data, d_x, d_y1, d_y2, 
-                   time_len=200, plot_freq=200_000):
+                   time_len=200, plot_freq=200_000, device='cpu'):
 
     model.eval()
 
@@ -73,7 +73,7 @@ def val_only_extra(model, validation_indices, epoch_count, demo_data, d_x, d_y1,
         context = C[validation_idx]
 
         ff_means, ff_stds = model_predict.predict_forward_forward(model, time_len, context,
-                                                                   f_condition_points, d_x, d_y1, d_y2)
+                                                                   f_condition_points, d_x, d_y1, d_y2, device=device)
         
         if epoch_count % plot_freq == 0 and validation_idx == validation_indices[plot_id]:
             error += utils.validate_model(ff_means, ff_stds, validation_idx, demo_data, time_len, f_condition_points, epoch_count, d_y1, d_y2, forward=True, plot=False)

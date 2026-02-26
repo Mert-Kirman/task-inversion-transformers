@@ -15,7 +15,7 @@ import model.model_predict as model_predict
 import model.utils as utils
 
 # ================= CONFIGURATION =================
-run_id = "run_1767992349.943897"
+run_id = "run_1772125666.0968907"
 save_path = f"model/insert_place_square_round_peg/save/{run_id}"
 
 # POINT TO THE PAIRED DATA FOLDER
@@ -174,7 +174,7 @@ def plot_training_progress():
     except FileNotFoundError:
         print("Training logs not found, skipping progress plot.")
 
-def calculate_success_rates_and_plot():
+def calculate_success_rates_and_plot(device='cpu'):
     """
     Evaluates success based on Start (t=0) and End (t=1) point accuracy.
     Threshold: 5% (Strict) and 10% (Relaxed) of the global data range (per dimension).
@@ -183,10 +183,18 @@ def calculate_success_rates_and_plot():
     
     # Load Data & Stats
     y_min, y_max, c_min, c_max = load_normalization_stats()
+    # Move normalization stats to the correct device
+    y_min = y_min.to(device)
+    y_max = y_max.to(device)
+    if c_min is not None:
+        c_min = c_min.to(device)
+    if c_max is not None:
+        c_max = c_max.to(device)
+    
     Y1_raw, Y2_raw, C_raw, obj_names = load_matched_data()
     
     # Determine Thresholds
-    global_range = (y_max - y_min).numpy()
+    global_range = (y_max - y_min).cpu().numpy()
     
     # Define scenarios: Label, Percentage, Threshold Vector
     scenarios = [
@@ -203,14 +211,19 @@ def calculate_success_rates_and_plot():
     d_param = C_raw.shape[1] 
     time_len = Y1_raw.shape[1] 
     
-    model = dual_enc_dec_cnmp.DualEncoderDecoder(d_x, d_y1, d_y2, d_param)
+    # Move data to device
+    Y1_raw = Y1_raw.to(device)
+    Y2_raw = Y2_raw.to(device)
+    C_raw = C_raw.to(device)
+    
+    model = dual_enc_dec_cnmp.DualEncoderDecoder(d_x, d_y1, d_y2, d_param).to(device)
     model_path = os.path.join(save_path, model_name)
     
     if not os.path.exists(model_path):
         print(f"Model not found at {model_path}")
         return
 
-    model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+    model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
     
     # Normalize Inputs
@@ -236,11 +249,11 @@ def calculate_success_rates_and_plot():
         
         with torch.no_grad():
              means_norm, _ = model_predict.predict_inverse_inverse(
-                model, time_len, curr_context, cond_pts, d_x, d_y1, d_y2
+                model, time_len, curr_context, cond_pts, d_x, d_y1, d_y2, device=device
             )
         
-        pred_traj = denormalize_data(means_norm, y_min, y_max).numpy()
-        gt_traj = Y2_raw[i].numpy()
+        pred_traj = denormalize_data(means_norm, y_min, y_max).cpu().numpy()
+        gt_traj = Y2_raw[i].cpu().numpy()
         
         predictions.append({
             'pred': pred_traj,
@@ -329,9 +342,16 @@ def calculate_success_rates_and_plot():
     plt.savefig(plot_path, dpi=300)
     print(f"Bar chart saved to {plot_path}")
 
-def evaluate_random_trajectories(num_samples=6):
+def evaluate_random_trajectories(num_samples=6, device='cpu'):
     # 1. Load Norm Stats
     y_min, y_max, c_min, c_max = load_normalization_stats()
+    # Move to correct device
+    y_min = y_min.to(device)
+    y_max = y_max.to(device)
+    if c_min is not None:
+        c_min = c_min.to(device)
+    if c_max is not None:
+        c_max = c_max.to(device)
     
     # 2. Load Raw Matched Data
     Y1_raw, Y2_raw, C_raw, obj_names = load_matched_data()
@@ -343,6 +363,11 @@ def evaluate_random_trajectories(num_samples=6):
     time_len = Y1_raw.shape[1] 
     num_demos = Y1_raw.shape[0]
 
+    # Move data to device
+    Y1_raw = Y1_raw.to(device)
+    Y2_raw = Y2_raw.to(device)
+    C_raw = C_raw.to(device)
+
     # --- NORMALIZE CONTEXT ---
     # We must normalize C using the stats from training
     C_normalized = C_raw.clone()
@@ -350,7 +375,7 @@ def evaluate_random_trajectories(num_samples=6):
         C_normalized = normalize_data(C_raw, c_min, c_max)
 
     # 3. Load Model
-    model = dual_enc_dec_cnmp.DualEncoderDecoder(d_x, d_y1, d_y2, d_param)
+    model = dual_enc_dec_cnmp.DualEncoderDecoder(d_x, d_y1, d_y2, d_param).to(device)
     model_path = os.path.join(save_path, model_name)
     
     if not os.path.exists(model_path):
@@ -358,7 +383,7 @@ def evaluate_random_trajectories(num_samples=6):
         return
 
     print(f"Loading model state from {model_path}...")
-    model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+    model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 
     # 4. Select Random Indices
@@ -367,7 +392,7 @@ def evaluate_random_trajectories(num_samples=6):
     
     # 5. Define Condition Points
     time_steps = np.linspace(0, 1, time_len)
-    cond_step_indices = [300] # Conditioning at t=0.3 (During Insert)
+    cond_step_indices = [60] # Conditioning at t=0.3 (During Insert)
     
     # 6. Plot Setup
     fig, axes = plt.subplots(num_to_plot, d_y1, figsize=(15, 4 * num_to_plot))
@@ -379,7 +404,7 @@ def evaluate_random_trajectories(num_samples=6):
         curr_obj_name = obj_names[traj_idx]
         
         # --- A. Prepare Ground Truth ---
-        curr_y_truth_raw = Y2_raw[traj_idx].numpy() # Place Action (Inverse)
+        curr_y_truth_raw = Y2_raw[traj_idx].cpu().numpy() # Place Action (Inverse)
         
         # --- B. Prepare Input (Conditioning on Insert action) ---
         # The model is predicting Y2 (Place) given Y1 (Insert)
@@ -395,7 +420,7 @@ def evaluate_random_trajectories(num_samples=6):
         # --- C. Run Inference (Inverse Mode) ---
         with torch.no_grad():
             means_norm, stds_norm = model_predict.predict_inverse(
-                model, time_len, curr_context, condition_points, d_x, d_y1, d_y2
+                model, time_len, curr_context, condition_points, d_x, d_y1, d_y2, device=device
             )
             
         # --- D. Denormalize Output ---
@@ -413,12 +438,12 @@ def evaluate_random_trajectories(num_samples=6):
                     color='black', linestyle='-', linewidth=2, alpha=0.5, label='GT (Place)')
             
             # 2. Prediction
-            ax.plot(time_steps, means_pred[:, col_idx].numpy(), 
+            ax.plot(time_steps, means_pred[:, col_idx].cpu().numpy(), 
                     color='blue', linestyle='--', linewidth=2, label='Pred')
             
             # 3. Uncertainty
-            sigma = stds_pred[:, col_idx].numpy()
-            mean_curve = means_pred[:, col_idx].numpy()
+            sigma = stds_pred[:, col_idx].cpu().numpy()
+            mean_curve = means_pred[:, col_idx].cpu().numpy()
             ax.fill_between(time_steps, mean_curve - 2*sigma, mean_curve + 2*sigma, 
                             color='blue', alpha=0.1, label='Uncertainty')
 
@@ -442,7 +467,7 @@ def evaluate_random_trajectories(num_samples=6):
     print(f"Evaluation plots saved to {save_file}")
 
     # Condition from place action at t=0
-    cond_step_indices = [0] # Conditioning at t=0.3 (During Insert)
+    cond_step_indices = [0]
     
     fig, axes = plt.subplots(num_to_plot, d_y1, figsize=(15, 4 * num_to_plot))
     if num_to_plot == 1: axes = np.expand_dims(axes, 0) 
@@ -453,7 +478,7 @@ def evaluate_random_trajectories(num_samples=6):
         curr_obj_name = obj_names[traj_idx]
         
         # --- A. Prepare Ground Truth ---
-        curr_y_truth_raw = Y2_raw[traj_idx].numpy() # Place Action (Inverse)
+        curr_y_truth_raw = Y2_raw[traj_idx].cpu().numpy() # Place Action (Inverse)
         
         # --- B. Prepare Input (Conditioning on Insert action) ---
         # The model is predicting Y2 (Place) given Y1 (Insert)
@@ -469,7 +494,7 @@ def evaluate_random_trajectories(num_samples=6):
         # --- C. Run Inference (Inverse Mode) ---
         with torch.no_grad():
             means_norm, stds_norm = model_predict.predict_inverse_inverse(
-                model, time_len, curr_context, condition_points, d_x, d_y1, d_y2
+                model, time_len, curr_context, condition_points, d_x, d_y1, d_y2, device=device
             )
             
         # --- D. Denormalize Output ---
@@ -487,17 +512,17 @@ def evaluate_random_trajectories(num_samples=6):
                     color='black', linestyle='-', linewidth=2, alpha=0.5, label='GT (Place)')
             
             # 2. Prediction
-            ax.plot(time_steps, means_pred[:, col_idx].numpy(), 
+            ax.plot(time_steps, means_pred[:, col_idx].cpu().numpy(), 
                     color='blue', linestyle='--', linewidth=2, label='Pred')
             
             # 3. Uncertainty
-            sigma = stds_pred[:, col_idx].numpy()
-            mean_curve = means_pred[:, col_idx].numpy()
+            sigma = stds_pred[:, col_idx].cpu().numpy()
+            mean_curve = means_pred[:, col_idx].cpu().numpy()
             ax.fill_between(time_steps, mean_curve - 2*sigma, mean_curve + 2*sigma, 
                             color='blue', alpha=0.1, label='Uncertainty')
             
             # 4. Conditioning Point
-            cond_y_raw = Y2_raw[traj_idx, cond_step_indices[0], col_idx]
+            cond_y_raw = Y2_raw[traj_idx, cond_step_indices[0], col_idx].cpu().numpy()
             ax.scatter(time_steps[cond_step_indices[0]], cond_y_raw, 
                        color='red', s=80, marker='o', label='Condition Point')
 
@@ -523,6 +548,12 @@ def evaluate_random_trajectories(num_samples=6):
 if __name__ == "__main__":
     utils.seed_everything(42)
     
+    # Device configuration
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+    
     plot_training_progress()
-    calculate_success_rates_and_plot()
-    evaluate_random_trajectories(num_samples=100)
+    calculate_success_rates_and_plot(device=device)
+    evaluate_random_trajectories(num_samples=100, device=device)
