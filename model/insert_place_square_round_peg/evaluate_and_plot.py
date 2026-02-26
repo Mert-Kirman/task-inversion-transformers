@@ -12,6 +12,7 @@ if project_root not in sys.path:
 
 import model.insert_place_square_round_peg.dual_enc_dec_model as dual_enc_dec_cnmp
 import model.model_predict as model_predict
+import model.utils as utils
 
 # ================= CONFIGURATION =================
 run_id = "run_1767992349.943897"
@@ -361,7 +362,6 @@ def evaluate_random_trajectories(num_samples=6):
     model.eval()
 
     # 4. Select Random Indices
-    random.seed(42) 
     num_to_plot = min(num_samples, num_demos)
     indices = random.sample(range(num_demos), num_to_plot)
     
@@ -521,6 +521,8 @@ def evaluate_random_trajectories(num_samples=6):
     print(f"Evaluation plots saved to {save_file}")
 
 if __name__ == "__main__":
+    utils.seed_everything(42)
+    
     plot_training_progress()
     calculate_success_rates_and_plot()
     evaluate_random_trajectories(num_samples=100)

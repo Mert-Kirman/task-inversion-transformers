@@ -83,6 +83,8 @@ def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_ma
 
 
 if __name__ == "__main__":
+    utils.seed_everything(42)
+
     # --- CONFIGURATION ---
     base_data_folder = "data/paired_trajectories_insert_place"
     
