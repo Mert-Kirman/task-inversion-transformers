@@ -174,7 +174,7 @@ def plot_training_progress():
     except FileNotFoundError:
         print("Training logs not found, skipping progress plot.")
 
-def calculate_success_rates_and_plot():
+def calculate_success_rates_and_plot(device='cpu'):
     """
     Evaluates success based on Start (t=0) and End (t=1) point accuracy.
     Threshold: 5% (Strict) and 10% (Relaxed) of the global data range (per dimension).
@@ -203,14 +203,14 @@ def calculate_success_rates_and_plot():
     d_param = C_raw.shape[1] 
     time_len = Y1_raw.shape[1] 
     
-    model = dual_enc_dec_cnmp.DualEncoderDecoder(d_x, d_y1, d_y2, d_param)
+    model = dual_enc_dec_cnmp.DualEncoderDecoder(d_x, d_y1, d_y2, d_param).to(device)
     model_path = os.path.join(save_path, model_name)
     
     if not os.path.exists(model_path):
         print(f"Model not found at {model_path}")
         return
 
-    model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+    model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
     
     # Normalize Inputs
@@ -236,7 +236,7 @@ def calculate_success_rates_and_plot():
         
         with torch.no_grad():
              means_norm, _ = model_predict.predict_inverse_inverse(
-                model, time_len, curr_context, cond_pts, d_x, d_y1, d_y2
+                model, time_len, curr_context, cond_pts, d_x, d_y1, d_y2, device=device
             )
         
         pred_traj = denormalize_data(means_norm, y_min, y_max).numpy()
@@ -329,7 +329,7 @@ def calculate_success_rates_and_plot():
     plt.savefig(plot_path, dpi=300)
     print(f"Bar chart saved to {plot_path}")
 
-def evaluate_random_trajectories(num_samples=6):
+def evaluate_random_trajectories(num_samples=6, device='cpu'):
     # 1. Load Norm Stats
     y_min, y_max, c_min, c_max = load_normalization_stats()
     
@@ -350,7 +350,7 @@ def evaluate_random_trajectories(num_samples=6):
         C_normalized = normalize_data(C_raw, c_min, c_max)
 
     # 3. Load Model
-    model = dual_enc_dec_cnmp.DualEncoderDecoder(d_x, d_y1, d_y2, d_param)
+    model = dual_enc_dec_cnmp.DualEncoderDecoder(d_x, d_y1, d_y2, d_param).to(device)
     model_path = os.path.join(save_path, model_name)
     
     if not os.path.exists(model_path):
@@ -358,7 +358,7 @@ def evaluate_random_trajectories(num_samples=6):
         return
 
     print(f"Loading model state from {model_path}...")
-    model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+    model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 
     # 4. Select Random Indices
@@ -395,7 +395,7 @@ def evaluate_random_trajectories(num_samples=6):
         # --- C. Run Inference (Inverse Mode) ---
         with torch.no_grad():
             means_norm, stds_norm = model_predict.predict_inverse(
-                model, time_len, curr_context, condition_points, d_x, d_y1, d_y2
+                model, time_len, curr_context, condition_points, d_x, d_y1, d_y2, device=device
             )
             
         # --- D. Denormalize Output ---
@@ -469,7 +469,7 @@ def evaluate_random_trajectories(num_samples=6):
         # --- C. Run Inference (Inverse Mode) ---
         with torch.no_grad():
             means_norm, stds_norm = model_predict.predict_inverse_inverse(
-                model, time_len, curr_context, condition_points, d_x, d_y1, d_y2
+                model, time_len, curr_context, condition_points, d_x, d_y1, d_y2, device=device
             )
             
         # --- D. Denormalize Output ---
@@ -523,6 +523,12 @@ def evaluate_random_trajectories(num_samples=6):
 if __name__ == "__main__":
     utils.seed_everything(42)
     
+    # Device configuration
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+    
     plot_training_progress()
-    calculate_success_rates_and_plot()
-    evaluate_random_trajectories(num_samples=100)
+    calculate_success_rates_and_plot(device=device)
+    evaluate_random_trajectories(num_samples=100, device=device)

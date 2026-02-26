@@ -126,11 +126,11 @@ class DualEncoderDecoder(nn.Module):
         return torch.cat((output1, output2), dim=-1), L_F, L_I, extra_pass
     
 def get_training_sample(extra_pass, valid_inverses, validation_indices, demo_data, 
-                        OBS_MAX, d_N, d_x, d_y1, d_y2, d_param, time_len, batch_size=1):
+                        OBS_MAX, d_N, d_x, d_y1, d_y2, d_param, time_len, batch_size=1, device='cpu'):
 
     X1, X2, Y1, Y2, C = demo_data
     
-    traj_multinom = torch.ones(d_N) # multinomial distribution for trajectories
+    traj_multinom = torch.ones(d_N, device=device) # multinomial distribution for trajectories
 
     for i in range(d_N):
        if i in validation_indices:
@@ -143,18 +143,18 @@ def get_training_sample(extra_pass, valid_inverses, validation_indices, demo_dat
     
     traj_indices = torch.multinomial(traj_multinom, batch_size, replacement=False) # random indices of trajectories
 
-    obs_num_list = torch.randint(0, OBS_MAX, (2*batch_size,)) + 1  # random number of obs. points
+    obs_num_list = torch.randint(0, OBS_MAX, (2*batch_size,), device=device) + 1  # random number of obs. points
     max_obs_num = OBS_MAX
-    observations = torch.zeros((batch_size, max_obs_num, 2*d_x + d_y1 + d_y2))
-    mask_forward = torch.zeros((batch_size, max_obs_num, max_obs_num))
-    mask_inverse = torch.zeros((batch_size, max_obs_num, max_obs_num))
+    observations = torch.zeros((batch_size, max_obs_num, 2*d_x + d_y1 + d_y2), device=device)
+    mask_forward = torch.zeros((batch_size, max_obs_num, max_obs_num), device=device)
+    mask_inverse = torch.zeros((batch_size, max_obs_num, max_obs_num), device=device)
 
-    params = torch.zeros((batch_size, 1, d_param))
-    target_X = torch.zeros((batch_size, 1, d_x))
-    target_Y1 = torch.zeros((batch_size, 1, d_y1))
-    target_Y2 = torch.zeros((batch_size, 1, d_y2))
+    params = torch.zeros((batch_size, 1, d_param), device=device)
+    target_X = torch.zeros((batch_size, 1, d_x), device=device)
+    target_Y1 = torch.zeros((batch_size, 1, d_y1), device=device)
+    target_Y2 = torch.zeros((batch_size, 1, d_y2), device=device)
 
-    T = torch.ones(time_len)
+    T = torch.ones(time_len, device=device)
     for i in range(batch_size):
         traj_index = int(traj_indices[i])
         obs_num_f = int(obs_num_list[i])
