@@ -116,7 +116,7 @@ if __name__ == '__main__':
                     timestamps = high_level_action_dict[sensor][1]
                     modality_files[sensor] = (sensor_values, timestamps)
                     
-                synchronized_data = synchronize_multiple_modalities(modality_files, target_n_samples=1000)
+                synchronized_data = synchronize_multiple_modalities(modality_files, target_n_samples=200)
 
                 print("Synchronized Data Shapes:")
                 for sensor in robot_state_sensor_names:

@@ -180,7 +180,7 @@ def plot_verification(inserts, places, save_dir, num_plot=5):
     
     # Plot Z Plane (Height)
     plt.subplot(1, 2, 2)
-    time_steps = np.linspace(0, 1, 1000)
+    time_steps = np.linspace(0, 1, 200)
     for i in range(min(num_plot, len(inserts))):
         ins_z = inserts[i]['pose'][0][:, 2]
         place_z = places[i]['pose'][0][:, 2]

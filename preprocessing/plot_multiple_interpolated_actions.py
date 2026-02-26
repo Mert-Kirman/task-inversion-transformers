@@ -6,7 +6,7 @@ import os
 if __name__ == "__main__":
     robot_state_sensor_names = ['compensated_base_force', 'compensated_base_torque', 'gripper_positions', 'joint_efforts', 
                                 'joint_positions', 'joint_velocities', 'measured_force', 'measured_torque', 'pose', 'velocity']
-    timestamps_interpolated =  np.linspace(0, 1, 1000)
+    timestamps_interpolated =  np.linspace(0, 1, 200)
     
     processed_folder_path = 'data/processed_high_level_actions'
     available_actions = [d for d in os.listdir(processed_folder_path) if os.path.isdir(f'{processed_folder_path}/{d}')]
