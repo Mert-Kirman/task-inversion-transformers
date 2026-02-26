@@ -21,10 +21,10 @@ def predict_inverse(model, time_len, context, condition_points, d_x, d_y1, d_y2,
         obs = torch.cat((obs,obs), dim=-1)
         output, _, __, ___ = model(obs, params, mask, T, False, p=1)
         mean1, std1, mean2, std2 = output.chunk(4, dim=-1)
-        std2 = np.log(1+np.exp(std2.cpu()))
-        std1 = np.log(1+np.exp(std1.cpu()))
+        std2 = torch.log(1 + torch.exp(std2))
+        std1 = torch.log(1 + torch.exp(std1))
         means = mean2
-        stds = torch.from_numpy(std2).to(device)
+        stds = std2
     
     return means[0], stds[0]
 
@@ -48,10 +48,10 @@ def predict_forward_forward(model, time_len, context, condition_points, d_x, d_y
         obs = torch.cat((obs,obs), dim=-1)
         output, _, __, ___ = model(obs, params, mask, T, False, p=1)
         mean1, std1, mean2, std2 = output.chunk(4, dim=-1)
-        std2 = np.log(1+np.exp(std2.cpu()))
-        std1 = np.log(1+np.exp(std1.cpu()))
+        std2 = torch.log(1 + torch.exp(std2))
+        std1 = torch.log(1 + torch.exp(std1))
         means = mean1
-        stds = torch.from_numpy(std1).to(device)
+        stds = std1
     
     return means[0], stds[0]
 
@@ -76,10 +76,10 @@ def predict_forward(model, time_len, context, condition_points, d_x, d_y1, d_y2,
         obs = torch.cat((obs,obs), dim=-1)
         output, _, __, ___ = model(obs, params, mask, T, False, p=2)
         mean1, std1, mean2, std2 = output.chunk(4, dim=-1)
-        std2 = np.log(1+np.exp(std2.cpu()))
-        std1 = np.log(1+np.exp(std1.cpu()))
+        std2 = torch.log(1 + torch.exp(std2))
+        std1 = torch.log(1 + torch.exp(std1))
         means = mean1
-        stds = torch.from_numpy(std1).to(device)
+        stds = std1
     
     return means[0], stds[0]
 
@@ -103,9 +103,9 @@ def predict_inverse_inverse(model, time_len, context, condition_points, d_x, d_y
         obs = torch.cat((obs,obs), dim=-1)
         output, _, __, ____ = model(obs, params, mask, T, False, p=2)
         mean1, std1, mean2, std2 = output.chunk(4, dim=-1)
-        std2 = np.log(1+np.exp(std2.cpu()))
-        std1 = np.log(1+np.exp(std1.cpu()))
+        std2 = torch.log(1 + torch.exp(std2))
+        std1 = torch.log(1 + torch.exp(std1))
         means = mean2
-        stds = torch.from_numpy(std2).to(device)
+        stds = std2
     
     return means[0], stds[0]

@@ -95,10 +95,12 @@ class DualEncoderDecoder(nn.Module):
             L_I = sum_masked_r2 / (torch.sum(mask_inverse, dim=[1,2]).reshape(-1,1) + 1e-10) # (batch_size, 256)
             L_I = L_I.unsqueeze(1).expand(-1, x_tar.shape[1], -1) # (batch_size, num_tar, 256)
 
-        latent = torch.zeros(0)
+        # Get device from input tensor
+        device = obs.device
+        latent = torch.zeros(0, device=device)
         if p == 0:
-            p1 = torch.rand(1)
-            p2 = torch.rand(1)
+            p1 = torch.rand(1, device=device)
+            p2 = torch.rand(1, device=device)
             p1 = p1 / (p1 + p2)
             if not extra_pass:
                 latent = L_F * p1 + L_I * (1-p1)  # (batch_size, num_tar, 256)

@@ -62,10 +62,10 @@ def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_ma
 
         if i > 0 and i % 1000 == 0:
             epoch_train_error = validate_model.val_only_extra(model, training_indices, i, demo_data, d_x, d_y1, d_y2, time_len=time_len, device=device)
-            training_errors.append(epoch_train_error)
+            training_errors.append(epoch_train_error if isinstance(epoch_train_error, (int, float)) else epoch_train_error.item())
 
             epoch_val_error = validate_model.val_only_extra(model, validation_indices, i, demo_data, d_x, d_y1, d_y2, time_len=time_len, device=device)
-            validation_errors.append(epoch_val_error)
+            validation_errors.append(epoch_val_error if isinstance(epoch_val_error, (int, float)) else epoch_val_error.item())
             
             losses.append(loss.item())
 
@@ -251,8 +251,10 @@ if __name__ == "__main__":
     # Save Normalization Constants for Inference
     print("Saving Normalization Stats...")
     np.save(f'{save_folder}/run_{run_id}/normalization_stats.npy', {
-        'Y_min': Y_min_vals, 'Y_max': Y_max_vals,
-        'C_min': C_min_val, 'C_max': C_max_val
+        'Y_min': [v.cpu() if torch.is_tensor(v) else v for v in Y_min_vals],
+        'Y_max': [v.cpu() if torch.is_tensor(v) else v for v in Y_max_vals],
+        'C_min': C_min_val.cpu() if torch.is_tensor(C_min_val) else C_min_val,
+        'C_max': C_max_val.cpu() if torch.is_tensor(C_max_val) else C_max_val
     })
 
     EPOCHS = 60_001
