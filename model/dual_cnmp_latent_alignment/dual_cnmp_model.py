@@ -98,8 +98,15 @@ class DualCNMP(nn.Module):
         device = obs.device
         latent = torch.zeros(0, device=device)
         if p == 0:
-            # Always use L_F. The decoder must learn to reconstruct everything from the forward context.
-            latent = L_F
+            if not extra_pass:
+                # --- Discrete Routing ---
+                # 50% chance to use Forward context, 50% chance to use Inverse context
+                if torch.rand(1, device=device).item() < 0.5:
+                    latent = L_F
+                else:
+                    latent = L_I
+            else:
+                latent = L_F
         elif p == 1:
             latent = L_F # (1, num_tar, 256) , used for validation pass
         elif p == 2:
