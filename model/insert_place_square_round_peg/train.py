@@ -21,8 +21,15 @@ from tqdm import tqdm
 from torch.optim.lr_scheduler import LambdaLR
 import time
 
-def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_max, d_x, d_y1, d_y2, d_param, time_len, validation_indices, training_indices, save_folder, run_id, device, unpaired_traj=True):
 
+# Function for saving training configurations (epoch count, batch size, input dimensions, model name etc) in a txt file
+def save_training_configs(save_folder, run_id, details_dict):
+    details_path = os.path.join(save_folder, f'run_{run_id}', 'training_configs.txt')
+    with open(details_path, 'w') as f:
+        for key, value in details_dict.items():
+            f.write(f"{key}: {value}\n")
+
+def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_max, d_x, d_y1, d_y2, d_param, time_len, validation_indices, training_indices, save_folder, run_id, device, batch_size=16, unpaired_traj=True):
     os.makedirs(f'model/insert_place_square_round_peg/logs/run_{run_id}/', exist_ok=True)
     sys.stdout = open(f'model/insert_place_square_round_peg/logs/run_{run_id}/train_log.txt', 'w')
 
@@ -30,7 +37,6 @@ def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_ma
     validation_errors = []
     losses = []
 
-    BATCH_SIZE = 16
     d_N = len(valid_inverses)
     
     for i in tqdm(range(EPOCHS)):
@@ -45,7 +51,7 @@ def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_ma
         obs, params, mask, x_tar, y_tar_f, y_tar_i, extra_pass = dual_enc_dec_cnmp.get_training_sample(
             extra_pass, valid_inverses, validation_indices, demo_data, 
             obs_max, d_N, d_x, d_y1, d_y2, d_param, time_len, 
-            batch_size=BATCH_SIZE, device="cpu"
+            batch_size=batch_size, device="cpu"
         )
 
         # Transfer the fully constructed tensors to the GPU all at once
@@ -266,14 +272,51 @@ if __name__ == "__main__":
     })
 
     EPOCHS = 4001
+    BATCH_SIZE = 16
     learning_rate = 3e-4
+    weight_decay = 1e-5
+    dropout_p = [0.0, 0.0]
     
-    model = dual_enc_dec_cnmp.DualEncoderDecoder(d_x, d_y1, d_y2, d_param, dropout_p=[0.0, 0.0]).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)
+    model = dual_enc_dec_cnmp.DualEncoderDecoder(d_x, d_y1, d_y2, d_param, dropout_p=dropout_p).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = LambdaLR(optimizer, lr_lambda=lambda epoch: 1 if epoch < 40_000 else 5e-1)
+
+    # Save training configuration details
+    training_details = {
+        'model_name': 'DualCNMP',
+        'epochs': EPOCHS,
+        'batch_size': BATCH_SIZE,
+        'learning_rate': learning_rate,
+        'weight_decay': weight_decay,
+        'dropout_p': dropout_p,
+        'optimizer': 'Adam',
+        'scheduler': 'LambdaLR (1.0 until 40k, then 0.5)',
+        'device': str(device),
+        'd_x': d_x,
+        'd_y1': d_y1,
+        'd_y2': d_y2,
+        'd_param': d_param,
+        'time_len': time_len,
+        'obs_max': OBS_MAX,
+        'num_demonstrations': num_demo,
+        'num_training_samples': len(training_indices),
+        'num_validation_samples': len(validation_indices),
+        'Y1_shape': Y1.shape,
+        'Y2_shape': Y2.shape,
+        'C_shape': C.shape,
+        'objects_config': str(object_config),
+        'unpaired_training': True,
+        'extra_pass_probability': 0.20,
+        'gradient_clip_norm': 5.0,
+        'seed': 42
+    }
+    
+    save_training_configs(save_folder, run_id, training_details)
+    print(f"\nTraining configurations saved to run_{run_id}/training_configs.txt")
 
     training_errors, validation_errors, losses = train(
         model, optimizer, scheduler, EPOCHS, 
         valid_inverses, demo_data, OBS_MAX, d_x, d_y1, d_y2, d_param, time_len,
-        validation_indices, training_indices, save_folder, run_id, device, unpaired_traj=True
+        validation_indices, training_indices, save_folder, run_id, device, 
+        batch_size=BATCH_SIZE, unpaired_traj=True
     )
