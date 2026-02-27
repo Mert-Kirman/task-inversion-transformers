@@ -30,8 +30,7 @@ def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_ma
     validation_errors = []
     losses = []
 
-    # Batch Size = 1 was found to be best for this dataset size
-    BATCH_SIZE = 1
+    BATCH_SIZE = 16
     d_N = len(valid_inverses)
     
     for i in tqdm(range(EPOCHS)):
@@ -69,7 +68,7 @@ def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_ma
         optimizer.step()
         scheduler.step()
 
-        if i > 0 and i % 1000 == 0:
+        if i > 0 and i % 50 == 0:
             epoch_train_error = validate_model.val_only_extra(model, training_indices, i, demo_data, d_x, d_y1, d_y2, time_len=time_len, device=device)
             training_errors.append(epoch_train_error if isinstance(epoch_train_error, (int, float)) else epoch_train_error.item())
 
@@ -266,7 +265,7 @@ if __name__ == "__main__":
         'C_max': C_max_val.cpu() if torch.is_tensor(C_max_val) else C_max_val
     })
 
-    EPOCHS = 60_001
+    EPOCHS = 4001
     learning_rate = 3e-4
     
     model = dual_enc_dec_cnmp.DualEncoderDecoder(d_x, d_y1, d_y2, d_param, dropout_p=[0.0, 0.0]).to(device)
