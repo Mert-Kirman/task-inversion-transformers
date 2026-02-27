@@ -42,12 +42,21 @@ def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_ma
             if p < 0.20:
                 extra_pass = True
 
-        # Note: We pass batch_size explicitly here
+        # Force the sampling to happen on the CPU
         obs, params, mask, x_tar, y_tar_f, y_tar_i, extra_pass = dual_enc_dec_cnmp.get_training_sample(
             extra_pass, valid_inverses, validation_indices, demo_data, 
             obs_max, d_N, d_x, d_y1, d_y2, d_param, time_len, 
-            batch_size=BATCH_SIZE, device=device
+            batch_size=BATCH_SIZE, device="cpu"
         )
+
+        # Transfer the fully constructed tensors to the GPU all at once
+        obs = obs.to(device)
+        params = params.to(device)
+        mask = [m.to(device) for m in mask]
+        x_tar = x_tar.to(device)
+        y_tar_f = y_tar_f.to(device)
+        y_tar_i = y_tar_i.to(device)
+        demo_data = [d.to(device) for d in demo_data]
         
         optimizer.zero_grad()
         output, L_F, L_I, extra_pass = model(obs, params, mask, x_tar, extra_pass)
@@ -171,9 +180,9 @@ if __name__ == "__main__":
         all_valid_inverses.extend([is_paired] * num_loaded)
 
     # --- AGGREGATE ---
-    Y1 = torch.tensor(np.concatenate(all_Y1_list, axis=0), dtype=torch.float32).to(device)
-    Y2 = torch.tensor(np.concatenate(all_Y2_list, axis=0), dtype=torch.float32).to(device)
-    C = torch.tensor(np.concatenate(all_C_list, axis=0), dtype=torch.float32).to(device)
+    Y1 = torch.tensor(np.concatenate(all_Y1_list, axis=0), dtype=torch.float32)
+    Y2 = torch.tensor(np.concatenate(all_Y2_list, axis=0), dtype=torch.float32)
+    C = torch.tensor(np.concatenate(all_C_list, axis=0), dtype=torch.float32)
 
     # Convert valid_inverses to a simple boolean list (used by get_training_sample)
     valid_inverses = all_valid_inverses
@@ -225,8 +234,8 @@ if __name__ == "__main__":
     time_len = Y1.shape[1]
 
     # Create Time inputs (X)
-    X1 = torch.linspace(0, 1, time_len).repeat(num_demo, 1).reshape(num_demo, -1, 1).to(device)
-    X2 = torch.linspace(0, 1, time_len).repeat(num_demo, 1).reshape(num_demo, -1, 1).to(device)
+    X1 = torch.linspace(0, 1, time_len).repeat(num_demo, 1).reshape(num_demo, -1, 1)
+    X2 = torch.linspace(0, 1, time_len).repeat(num_demo, 1).reshape(num_demo, -1, 1)
 
     d_x = 1
     d_param = C.shape[1] 
