@@ -7,15 +7,10 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 import torch
-import torch.nn.functional as F
-import torch.distributions as D
 import torch.optim as optim
-import matplotlib.pyplot as plt
 import numpy as np
-import math
-import importlib
 import model.validate_model as validate_model
-import model.insert_place_square_round_peg.dual_enc_dec_model as dual_enc_dec_cnmp
+import model.dual_cnmp_latent_alignment.dual_cnmp_model as dual_cnmp_model
 import model.utils as utils
 from tqdm import tqdm
 from torch.optim.lr_scheduler import LambdaLR
@@ -30,8 +25,8 @@ def save_training_configs(save_folder, run_id, details_dict):
             f.write(f"{key}: {value}\n")
 
 def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_max, d_x, d_y1, d_y2, d_param, time_len, validation_indices, training_indices, save_folder, run_id, device, batch_size=16, unpaired_traj=True):
-    os.makedirs(f'model/insert_place_square_round_peg/logs/run_{run_id}/', exist_ok=True)
-    sys.stdout = open(f'model/insert_place_square_round_peg/logs/run_{run_id}/train_log.txt', 'w')
+    os.makedirs(f'model/dual_cnmp_latent_alignment/logs/run_{run_id}/', exist_ok=True)
+    sys.stdout = open(f'model/dual_cnmp_latent_alignment/logs/run_{run_id}/train_log.txt', 'w')
 
     training_errors = []
     validation_errors = []
@@ -48,7 +43,7 @@ def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_ma
                 extra_pass = True
 
         # Force the sampling to happen on the CPU
-        obs, params, mask, x_tar, y_tar_f, y_tar_i, extra_pass = dual_enc_dec_cnmp.get_training_sample(
+        obs, params, mask, x_tar, y_tar_f, y_tar_i, extra_pass = dual_cnmp_model.get_training_sample(
             extra_pass, valid_inverses, validation_indices, demo_data, 
             obs_max, d_N, d_x, d_y1, d_y2, d_param, time_len, 
             batch_size=batch_size, device="cpu"
@@ -66,7 +61,7 @@ def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_ma
         optimizer.zero_grad()
         output, L_F, L_I, extra_pass = model(obs, params, mask, x_tar, extra_pass)
         
-        loss = dual_enc_dec_cnmp.loss(output, y_tar_f, y_tar_i, d_y1, d_y2, d_param, L_F.squeeze(1), L_I.squeeze(1), extra_pass)
+        loss = dual_cnmp_model.loss(output, y_tar_f, y_tar_i, d_y1, d_y2, d_param, L_F.squeeze(1), L_I.squeeze(1), extra_pass)
         loss.backward()
 
         torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
@@ -258,7 +253,7 @@ if __name__ == "__main__":
 
     demo_data = [X1, X2, Y1, Y2, C]
 
-    save_folder = f"model/insert_place_square_round_peg/save"
+    save_folder = f"model/dual_cnmp_latent_alignment/save"
     run_id = time.time()
     os.makedirs(f'{save_folder}/run_{run_id}', exist_ok=True)
 
@@ -277,7 +272,7 @@ if __name__ == "__main__":
     weight_decay = 1e-5
     dropout_p = [0.0, 0.0]
     
-    model = dual_enc_dec_cnmp.DualEncoderDecoder(d_x, d_y1, d_y2, d_param, dropout_p=dropout_p).to(device)
+    model = dual_cnmp_model.DualCNMP(d_x, d_y1, d_y2, d_param, dropout_p=dropout_p).to(device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = LambdaLR(optimizer, lr_lambda=lambda epoch: 1 if epoch < 40_000 else 5e-1)
 
