@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import os
 
@@ -149,3 +149,15 @@ class ReassembleDataset(Dataset):
             'y_tar_i': y_tar_i,     # Ground truth inverse at x_tar
             'is_valid_inverse': is_valid_inverse
         }
+
+if __name__ == "__main__":
+    dataset = ReassembleDataset()
+    loader = DataLoader(dataset, batch_size=16)
+    batch = next(iter(loader))
+    print(f'\nForward Trajectory Batch Shape: {batch["y1_seq"].shape}')
+    print(f'Inverse Trajectory Batch Shape: {batch["y2_seq"].shape}')
+    print(f'Context Batch Shape: {batch["context"].shape}')
+    print(f'X Target Batch Shape: {batch["x_tar"].shape}')
+    print(f'Forward Target Batch Shape: {batch["y_tar_f"].shape}')
+    print(f'Inverse Target Batch Shape: {batch["y_tar_i"].shape}')
+    print(f'Valid Inverse Batch Shape: {len(batch["is_valid_inverse"])}')
