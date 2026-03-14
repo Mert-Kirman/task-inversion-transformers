@@ -1,23 +1,24 @@
 import sys
 import os
+from datetime import datetime
 
 # Add project root to Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+import numpy as np
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader, Subset
+from torch.optim.lr_scheduler import LambdaLR
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
+
 from dataset import ReassembleDataset
-import numpy as np
 import model.validate_model as validate_model
 import model.transformer_encoded_movement_primitive.temp_model as temp_model
 import model.utils as utils
-from tqdm import tqdm
-from torch.optim.lr_scheduler import LambdaLR
-import time
 
 
 def normalize_data(Y1, Y2, C, training_indices):
@@ -28,26 +29,27 @@ def normalize_data(Y1, Y2, C, training_indices):
     Y2_train = Y2[training_indices]
     C_train = C[training_indices]
 
-    Y1_min_vals = torch.amin(Y1_train, dim=(0, 1))  # (d_y1,)
-    Y1_max_vals = torch.amax(Y1_train, dim=(0, 1))  # (d_y1,)
-    Y2_min_vals = torch.amin(Y2_train, dim=(0, 1))  # (d_y2,)
-    Y2_max_vals = torch.amax(Y2_train, dim=(0, 1))  # (d_y2,)
+    # Combine Y1 and Y2 to find the absolute physical workspace boundaries
+    Y_train_combined = torch.cat([Y1_train, Y2_train], dim=0)
+    
+    # Calculate ONE set of min/max values for both trajectories
+    Y_min_vals = torch.amin(Y_train_combined, dim=(0, 1))  # (d_y,)
+    Y_max_vals = torch.amax(Y_train_combined, dim=(0, 1))  # (d_y,)
 
     C_min_val = torch.min(C_train, dim=0).values
     C_max_val = torch.max(C_train, dim=0).values
 
-    # Avoid division by zero by adding a small epsilon to the denominator
     epsilon = 1e-8
-    Y1_normalized = (Y1 - Y1_min_vals) / (Y1_max_vals - Y1_min_vals + epsilon)
-    Y2_normalized = (Y2 - Y2_min_vals) / (Y2_max_vals - Y2_min_vals + epsilon)
+    # Apply the SHARED bounds to both Y1 and Y2
+    Y1_normalized = (Y1 - Y_min_vals) / (Y_max_vals - Y_min_vals + epsilon)
+    Y2_normalized = (Y2 - Y_min_vals) / (Y_max_vals - Y_min_vals + epsilon)
     C_normalized = (C - C_min_val) / (C_max_val - C_min_val + epsilon)
 
-    print(f"Context Normalized. Range: [{C_normalized.min()}, {C_normalized.max()}]")
+    # Return the shared bounds
+    return Y1_normalized, Y2_normalized, C_normalized, Y_min_vals, Y_max_vals, C_min_val, C_max_val
 
-    return Y1_normalized, Y2_normalized, C_normalized, Y1_min_vals, Y1_max_vals, Y2_min_vals, Y2_max_vals, C_min_val, C_max_val
-
-# Function for saving training configurations (epoch count, batch size, input dimensions, model name etc) in a txt file
 def save_training_configs(save_folder, details_dict):
+    '''Save training configurations (epoch count, batch size, input dimensions, model name etc) in a txt file for future reference'''
     details_path = os.path.join(save_folder, 'training_configs.txt')
     with open(details_path, 'w') as f:
         for key, value in details_dict.items():
@@ -137,7 +139,7 @@ if __name__ == "__main__":
     )
 
     # Calculate normalization stats only on the training subset (important to avoid data leakage!)
-    full_dataset.Y1, full_dataset.Y2, full_dataset.C, Y1_min_vals, Y1_max_vals, Y2_min_vals, Y2_max_vals, C_min_val, C_max_val = normalize_data(full_dataset.Y1, full_dataset.Y2, full_dataset.C, train_idx)
+    full_dataset.Y1, full_dataset.Y2, full_dataset.C, Y_min_vals, Y_max_vals, C_min_val, C_max_val = normalize_data(full_dataset.Y1, full_dataset.Y2, full_dataset.C, train_idx)
 
     train_dataset = Subset(full_dataset, train_idx)
     val_dataset = Subset(full_dataset, val_idx)
@@ -145,7 +147,7 @@ if __name__ == "__main__":
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
 
-    run_id = time.time()
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     save_folder = f"model/transformer_encoded_movement_primitive/save/run_{run_id}"
     os.makedirs(save_folder, exist_ok=True)
 
