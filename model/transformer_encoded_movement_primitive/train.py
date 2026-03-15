@@ -57,9 +57,12 @@ def save_training_configs(save_folder, details_dict):
 def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_reconstruction_loader, val_loader, d_y1, d_y2, d_param, save_folder, device, norm_stats):
     sys.stdout = open(os.path.join(save_folder, 'train_log.txt'), 'w')
 
-    training_losses = []
-    validation_losses = []
-    best_val_loss = float('inf')
+    composite_loss_list = []
+    train_fwd_mse_list = []
+    train_inv_mse_list = []
+    val_fwd_mse_list = []
+    val_inv_mse_list = []
+    best_val_inv_mse = float('inf')
 
     # Create an iterator for the reconstruction data
     rec_iter = iter(train_reconstruction_loader)
@@ -110,39 +113,79 @@ def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_rec
             
         scheduler.step()
         avg_train_loss = epoch_train_loss / len(train_inversion_loader)
-        training_losses.append(avg_train_loss)
+        composite_loss_list.append(avg_train_loss)
         
         # --- Validation ---
         if (epoch + 1) % 50 == 0:
             model.eval()
-            epoch_val_loss = 0.0
+            epoch_train_fwd_mse = 0.0
+            epoch_train_inv_mse = 0.0
+            epoch_val_fwd_mse = 0.0
+            epoch_val_inv_mse = 0.0
             
             with torch.no_grad():
+                # 1. Evaluate on Training Data
+                for train_batch in train_reconstruction_loader: # Use all training data
+                    y1_seq = train_batch['y1_seq'].to(device)
+                    y2_seq = train_batch['y2_seq'].to(device)
+                    params = train_batch['context'].unsqueeze(1).to(device)
+
+                    # Generate all time points for the full trajectory
+                    batch_size = y1_seq.shape[0]
+                    time_len = y1_seq.shape[1]
+                    x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1).repeat(batch_size, 1, 1)
+                
+                    output, _, _, _ = model(y1_seq, y2_seq, params, x_full, extra_pass=False, p=1) # p=1 forces L_F
+                    pred_mean_f, _, pred_mean_i, _ = output.chunk(4, dim=-1)
+                    
+                    # Compare full prediction against full ground truth sequences
+                    epoch_train_fwd_mse += torch.nn.functional.mse_loss(pred_mean_f, y1_seq).item()
+                    epoch_train_inv_mse += torch.nn.functional.mse_loss(pred_mean_i, y2_seq).item()
+
+                # 2. Evaluate on Validation Data
                 for val_batch in val_loader:
                     y1_seq = val_batch['y1_seq'].to(device)
                     y2_seq = val_batch['y2_seq'].to(device)
                     params = val_batch['context'].unsqueeze(1).to(device)
-                    x_tar = val_batch['x_tar'].to(device)
-                    y_tar_f = val_batch['y_tar_f'].to(device)
-                    y_tar_i = val_batch['y_tar_i'].to(device)
+
+                    # Generate all time points for the full trajectory
+                    batch_size = y1_seq.shape[0]
+                    time_len = y1_seq.shape[1]
+                    x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1).repeat(batch_size, 1, 1)
                     
                     # Validation is always evaluated on Task Inversion (extra_pass = False)
                     # so we test its actual primary objective.
-                    output, L_F, L_I, extra_pass = model(y1_seq, y2_seq, params, x_tar, False)
-                    v_loss = temp_model.loss(output, y_tar_f, y_tar_i, d_y1, d_y2, d_param, L_F.squeeze(1), L_I.squeeze(1), False)
-                    epoch_val_loss += v_loss.item()
+                    output, _, _, _ = model(y1_seq, y2_seq, params, x_full, extra_pass=False, p=1) # p=1 means we condition on forward trajectory for inference (forces L_F to be used in decoding)
+                    pred_mean_f, _, pred_mean_i, _ = output.chunk(4, dim=-1)
+                    
+                    # Compare full prediction against full ground truth sequences
+                    epoch_val_fwd_mse += torch.nn.functional.mse_loss(pred_mean_f, y1_seq).item()
+                    epoch_val_inv_mse += torch.nn.functional.mse_loss(pred_mean_i, y2_seq).item()
             
-            avg_val_loss = epoch_val_loss / len(val_loader)
-            validation_losses.append(avg_val_loss)
+            # Calculate averages
+            avg_train_fwd_mse = epoch_train_fwd_mse / len(train_reconstruction_loader)
+            avg_train_inv_mse = epoch_train_inv_mse / len(train_reconstruction_loader)
+            avg_val_fwd_mse = epoch_val_fwd_mse / len(val_loader)
+            avg_val_inv_mse = epoch_val_inv_mse / len(val_loader)
+
+            train_fwd_mse_list.append(avg_train_fwd_mse)
+            train_inv_mse_list.append(avg_train_inv_mse)
+            val_fwd_mse_list.append(avg_val_fwd_mse)
+            val_inv_mse_list.append(avg_val_inv_mse)
             
             # Save metrics
-            np.save(os.path.join(save_folder, 'training_losses.npy'), np.array(training_losses))
-            np.save(os.path.join(save_folder, 'validation_losses.npy'), np.array(validation_losses))
-
-            # Save Best Model WITH Normalization Stats
-            if avg_val_loss < best_val_loss:
-                best_val_loss = avg_val_loss
-                tqdm.write(f"Saved model epoch {epoch}, Train loss: {avg_train_loss:.6f}, Val loss: {avg_val_loss:.6f}")
+            np.save(os.path.join(save_folder, 'composite_losses.npy'), np.array(composite_loss_list))
+            
+            np.save(os.path.join(save_folder, 'train_fwd_mse.npy'), np.array(train_fwd_mse_list))
+            np.save(os.path.join(save_folder, 'val_fwd_mse.npy'), np.array(val_fwd_mse_list))
+            
+            np.save(os.path.join(save_folder, 'train_inv_mse.npy'), np.array(train_inv_mse_list))
+            np.save(os.path.join(save_folder, 'val_inv_mse.npy'), np.array(val_inv_mse_list))
+            
+            # --- Save Best Model strictly based on Zero-Shot Inversion Performance ---
+            if avg_val_inv_mse < best_val_inv_mse:
+                best_val_inv_mse = avg_val_inv_mse
+                tqdm.write(f"Saved model epoch {epoch}, Train Inv MSE: {avg_train_inv_mse:.6f}, Val Inv MSE: {avg_val_inv_mse:.6f}")
                 
                 checkpoint = {
                     'model_state_dict': model.state_dict(),
