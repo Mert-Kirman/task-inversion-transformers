@@ -16,7 +16,6 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
 from dataset import ReassembleDataset
-import model.validate_model as validate_model
 import model.transformer_encoded_movement_primitive.temp_model as temp_model
 import model.utils as utils
 
@@ -55,64 +54,102 @@ def save_training_configs(save_folder, details_dict):
         for key, value in details_dict.items():
             f.write(f"{key}: {value}\n")
 
-def train(model, optimizer, scheduler, EPOCHS, train_loader, d_y1, d_y2, d_param, time_len, save_folder, device):
+def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_reconstruction_loader, val_loader, d_y1, d_y2, d_param, save_folder, device, norm_stats):
     sys.stdout = open(os.path.join(save_folder, 'train_log.txt'), 'w')
 
-    training_errors = []
-    validation_errors = []
-    losses = []
+    training_losses = []
+    validation_losses = []
+    best_val_loss = float('inf')
 
-    for epoch in tqdm(range(EPOCHS)):
-        for batch in train_loader:
+    # Create an iterator for the reconstruction data
+    rec_iter = iter(train_reconstruction_loader)
+
+    for epoch in tqdm(range(EPOCHS), desc="Training Progress", unit="epoch"):
+        model.train()
+        epoch_train_loss = 0.0
+        
+        # We loop over the paired (inversion) data to guarantee we see it all evenly
+        for inv_batch in train_inversion_loader:
             
-            # Move data to device
-            y1_seq = batch['y1_seq'].to(device) # Shape: (batch, time_len, d_y1)
-            y2_seq = batch['y2_seq'].to(device)
-            params = batch['context'].unsqueeze(1).to(device) # Shape: (batch, 1, d_param)
-            x_tar = batch['x_tar'].to(device) # Shape: (batch, 1, d_x)
-            y_tar_f = batch['y_tar_f'].to(device) # Shape: (batch, 1, d_y1)
-            y_tar_i = batch['y_tar_i'].to(device)
-            valid_inverses_batch = batch['is_valid_inverse'] # Shape: (batch,)
-
-            # Logic for extra_pass (Unpaired data)
-            # If the batch contains any invalid inverses, or randomly 20% of the time
-            extra_pass = False
-            if not all(valid_inverses_batch) or torch.rand(1).item() < 0.20:
+            # Coin flip for THIS SPECIFIC BATCH
+            is_reconstruction_step = torch.rand(1).item() < 0.20
+            
+            if is_reconstruction_step:
+                try:
+                    batch = next(rec_iter)
+                except StopIteration:
+                    # Reset the iterator if it runs out
+                    rec_iter = iter(train_reconstruction_loader)
+                    batch = next(rec_iter)
                 extra_pass = True
+            else:
+                batch = inv_batch
+                extra_pass = False
+
+            # Move data to device
+            y1_seq = batch['y1_seq'].to(device)
+            y2_seq = batch['y2_seq'].to(device)
+            params = batch['context'].unsqueeze(1).to(device) 
+            x_tar = batch['x_tar'].to(device)
+            y_tar_f = batch['y_tar_f'].to(device)
+            y_tar_i = batch['y_tar_i'].to(device)
 
             optimizer.zero_grad()
             
-            # Note: The model forward signature will change when we add BERT!
-            # For now, it might look something like this:
+            # Forward pass
             output, L_F, L_I, extra_pass = model(y1_seq, y2_seq, params, x_tar, extra_pass)
             
+            # Loss calculation
             loss = temp_model.loss(output, y_tar_f, y_tar_i, d_y1, d_y2, d_param, L_F.squeeze(1), L_I.squeeze(1), extra_pass)
             
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             optimizer.step()
-        
-        scheduler.step()
-        
-        # Validation
-        if (epoch + 1) % 50 == 0:
-            epoch_train_error = validate_model.val_only_extra(model, training_indices, i, demo_data, d_x, d_y1, d_y2, time_len=time_len, device=device)
-            training_errors.append(epoch_train_error if isinstance(epoch_train_error, (int, float)) else epoch_train_error.item())
-
-            epoch_val_error = validate_model.val_only_extra(model, validation_indices, i, demo_data, d_x, d_y1, d_y2, time_len=time_len, device=device)
-            validation_errors.append(epoch_val_error if isinstance(epoch_val_error, (int, float)) else epoch_val_error.item())
             
-            losses.append(loss.item())
+            epoch_train_loss += loss.item()
+            
+        scheduler.step()
+        avg_train_loss = epoch_train_loss / len(train_inversion_loader)
+        training_losses.append(avg_train_loss)
+        
+        # --- Validation ---
+        if (epoch + 1) % 50 == 0:
+            model.eval()
+            epoch_val_loss = 0.0
+            
+            with torch.no_grad():
+                for val_batch in val_loader:
+                    y1_seq = val_batch['y1_seq'].to(device)
+                    y2_seq = val_batch['y2_seq'].to(device)
+                    params = val_batch['context'].unsqueeze(1).to(device)
+                    x_tar = val_batch['x_tar'].to(device)
+                    y_tar_f = val_batch['y_tar_f'].to(device)
+                    y_tar_i = val_batch['y_tar_i'].to(device)
+                    
+                    # Validation is always evaluated on Task Inversion (extra_pass = False)
+                    # so we test its actual primary objective.
+                    output, L_F, L_I, extra_pass = model(y1_seq, y2_seq, params, x_tar, False)
+                    v_loss = temp_model.loss(output, y_tar_f, y_tar_i, d_y1, d_y2, d_param, L_F.squeeze(1), L_I.squeeze(1), False)
+                    epoch_val_loss += v_loss.item()
+            
+            avg_val_loss = epoch_val_loss / len(val_loader)
+            validation_losses.append(avg_val_loss)
+            
+            # Save metrics
+            np.save(os.path.join(save_folder, 'training_losses.npy'), np.array(training_losses))
+            np.save(os.path.join(save_folder, 'validation_losses.npy'), np.array(validation_losses))
 
-            # Save errors and losses
-            np.save(os.path.join(save_folder, 'training_errors_mse.npy'), np.array(training_errors))
-            np.save(os.path.join(save_folder, 'validation_errors_mse.npy'), np.array(validation_errors))
-            np.save(os.path.join(save_folder, 'losses_log_prob.npy'), np.array(losses))
-
-            if min(validation_errors) == validation_errors[-1]:
-                # Save model
-                tqdm.write(f"Saved model epoch {epoch}, Train loss: {loss.item():6f}, Validation error: {epoch_val_error:6f}")
-                torch.save(model.state_dict(), os.path.join(save_folder, 'best_model.pth'))
+            # Save Best Model WITH Normalization Stats
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+                tqdm.write(f"Saved model epoch {epoch}, Train loss: {avg_train_loss:.6f}, Val loss: {avg_val_loss:.6f}")
+                
+                checkpoint = {
+                    'model_state_dict': model.state_dict(),
+                    'norm_stats': norm_stats,
+                    'epoch': epoch
+                }
+                torch.save(checkpoint, os.path.join(save_folder, 'best_model.pth'))
 
 
 if __name__ == "__main__":
@@ -138,13 +175,20 @@ if __name__ == "__main__":
         stratify=labels
     )
 
-    # Calculate normalization stats only on the training subset (important to avoid data leakage!)
+    # --- Calculate normalization stats only on the training subset (avoid data leakage) ---
     full_dataset.Y1, full_dataset.Y2, full_dataset.C, Y_min_vals, Y_max_vals, C_min_val, C_max_val = normalize_data(full_dataset.Y1, full_dataset.Y2, full_dataset.C, train_idx)
 
-    train_dataset = Subset(full_dataset, train_idx)
+    # --- Filter indices for the Paired task (Round pegs only) ---
+    paired_train_idx = [i for i in train_idx if full_dataset.valid_inverses[i]]
+    
+    # Create two Subsets
+    train_inversion_dataset = Subset(full_dataset, paired_train_idx) # Only paired trajectories for inversion task
+    train_reconstruction_dataset = Subset(full_dataset, train_idx) # Uses ALL data
     val_dataset = Subset(full_dataset, val_idx)
-
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+    
+    # Create two DataLoaders
+    train_inversion_loader = DataLoader(train_inversion_dataset, batch_size=16, shuffle=True)
+    train_reconstruction_loader = DataLoader(train_reconstruction_dataset, batch_size=16, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -192,9 +236,27 @@ if __name__ == "__main__":
     }
     
     save_training_configs(save_folder, training_details)
+
+    # Package the normalization stats to save inside the checkpoint
+    norm_stats = {
+        'Y_min': Y_min_vals,
+        'Y_max': Y_max_vals,
+        'C_min': C_min_val,
+        'C_max': C_max_val
+    }
+
     train(
-        model, optimizer, scheduler, EPOCHS, 
-        valid_inverses, demo_data, OBS_MAX, d_x, d_y1, d_y2, d_param, time_len,
-        validation_indices, training_indices, save_folder, run_id, device, 
-        batch_size=BATCH_SIZE, unpaired_traj=True
+        model=model, 
+        optimizer=optimizer, 
+        scheduler=scheduler, 
+        EPOCHS=EPOCHS, 
+        train_inversion_loader=train_inversion_loader, 
+        train_reconstruction_loader=train_reconstruction_loader, 
+        val_loader=val_loader, 
+        d_y1=full_dataset.d_y1, 
+        d_y2=full_dataset.d_y2, 
+        d_param=full_dataset.d_param, 
+        save_folder=save_folder, 
+        device=device,
+        norm_stats=norm_stats
     )
