@@ -153,7 +153,7 @@ def plot_training_progress():
         # Add a moving average for cleaner visualization
         window_size = 50
         moving_avg = np.convolve(composite_losses, np.ones(window_size)/window_size, mode='valid')
-        plt.plot(moving_avg, label=f'{window_size}-Epoch Moving Average')
+        plt.plot(range(window_size-1, len(composite_losses)), moving_avg, label=f'{window_size}-Epoch Moving Average')
         plt.title('Training Loss')
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
