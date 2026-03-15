@@ -54,8 +54,22 @@ def save_training_configs(save_folder, details_dict):
         for key, value in details_dict.items():
             f.write(f"{key}: {value}\n")
 
+class Logger(object):
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, "w")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)  
+        self.log.flush() # Force write to disk immediately
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
 def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_reconstruction_loader, val_loader, d_y1, d_y2, d_param, save_folder, device, norm_stats):
-    sys.stdout = open(os.path.join(save_folder, 'train_log.txt'), 'w')
+    sys.stdout = Logger(os.path.join(save_folder, 'train_log.txt'))
 
     composite_loss_list = []
     train_fwd_mse_list = []
@@ -181,11 +195,13 @@ def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_rec
             
             np.save(os.path.join(save_folder, 'train_inv_mse.npy'), np.array(train_inv_mse_list))
             np.save(os.path.join(save_folder, 'val_inv_mse.npy'), np.array(val_inv_mse_list))
+
+            tqdm.write(f"Epoch {epoch}, Train Inv MSE: {avg_train_inv_mse:.6f}, Val Inv MSE: {avg_val_inv_mse:.6f}")
             
             # --- Save Best Model strictly based on Zero-Shot Inversion Performance ---
             if avg_val_inv_mse < best_val_inv_mse:
                 best_val_inv_mse = avg_val_inv_mse
-                tqdm.write(f"Saved model epoch {epoch}, Train Inv MSE: {avg_train_inv_mse:.6f}, Val Inv MSE: {avg_val_inv_mse:.6f}")
+                tqdm.write(f"*** New Best Model Saved with Val Inversion MSE: {avg_val_inv_mse:.6f} ***")
                 
                 checkpoint = {
                     'model_state_dict': model.state_dict(),
@@ -239,7 +255,7 @@ if __name__ == "__main__":
     os.makedirs(save_folder, exist_ok=True)
 
     # -- MODEL, OPTIMIZER, SCHEDULER CONFIGURATION ---
-    EPOCHS = 4001
+    EPOCHS = 3001
     BATCH_SIZE = 16
     learning_rate = 3e-4
     weight_decay = 1e-5
