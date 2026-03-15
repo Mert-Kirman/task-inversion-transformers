@@ -16,7 +16,7 @@ import model.model_predict as model_predict
 import model.utils as utils
 
 # ================= CONFIGURATION =================
-run_id = "run_20260315_041044"
+run_id = "run_20260315_222036"
 save_path = f"model/transformer_encoded_movement_primitive/save/{run_id}"
 
 # POINT TO THE PAIRED DATA FOLDER
@@ -138,16 +138,43 @@ def load_matched_data():
 def plot_training_progress():
     """Plots loss and error curves if they exist."""
     try:
-        train_err = np.load(f'{save_path}/training_losses.npy')
-        val_err = np.load(f'{save_path}/validation_losses.npy')
+        composite_losses = np.load(f'{save_path}/composite_losses.npy')
+        
+        train_fwd_mse = np.load(f'{save_path}/train_fwd_mse.npy')
+        train_inv_mse = np.load(f'{save_path}/train_inv_mse.npy')
+
+        val_fwd_mse = np.load(f'{save_path}/val_fwd_mse.npy')
+        val_inv_mse = np.load(f'{save_path}/val_inv_mse.npy')
 
         plt.figure(figsize=(15, 5))
-        plt.plot(train_err, label='Train Loss')
-        val_epochs = np.arange(49, len(train_err), 50)
-        plt.plot(val_epochs, val_err, label='Val Loss')
-        plt.title('Log Probability Loss + Latent Alignment MSE Loss')
+
+        plt.subplot(1, 3, 1)
+        plt.plot(composite_losses, label='Composite Loss (Log Prob + Latent Alignment MSE)')
+        # Add a moving average for cleaner visualization
+        window_size = 50
+        moving_avg = np.convolve(composite_losses, np.ones(window_size)/window_size, mode='valid')
+        plt.plot(moving_avg, label=f'{window_size}-Epoch Moving Average')
+        plt.title('Training Loss')
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+
+        plt.subplot(1, 3, 2)
+        plt.plot(train_fwd_mse, label='Train Forward MSE')
+        plt.plot(val_fwd_mse, label='Val Forward MSE')
+        plt.title('Forward MSE')
+        plt.xlabel('Epoch (x50)')
+        plt.ylabel('MSE')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+
+        plt.subplot(1, 3, 3)
+        plt.plot(train_inv_mse, label='Train Inverse MSE')
+        plt.plot(val_inv_mse, label='Val Inverse MSE')
+        plt.title('Inverse MSE')
+        plt.xlabel('Epoch (x50)')
+        plt.ylabel('MSE')
         plt.grid(True, alpha=0.3)
         plt.legend()
 
