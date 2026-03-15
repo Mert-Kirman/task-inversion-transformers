@@ -18,122 +18,21 @@ import model.utils as utils
 # ================= CONFIGURATION =================
 run_id = "run_20260315_222036"
 save_path = f"model/transformer_encoded_movement_primitive/save/{run_id}"
-
-# POINT TO THE PAIRED DATA FOLDER
-data_path = "data/paired_trajectories_insert_place" 
-
-model_name = "best_model.pth"
-
-# Object Configuration (Must match train.py)
-object_config = {
-    'round_peg_4':  {'id': 0.0, 'label': 'Round Peg 4 (Source)'},
-    'square_peg_4': {'id': 1.0, 'label': 'Square Peg 4 (Target)'} 
-}
 # =================================================
 
-def load_normalization_stats():
-    """Loads min/max values used for normalization during training."""
-    stats_path = os.path.join(save_path, 'normalization_stats.npy')
-    if not os.path.exists(stats_path):
-        print(f"Error: Normalization stats not found at {stats_path}")
-        sys.exit(1)
-    
-    stats = np.load(stats_path, allow_pickle=True).item()
-    
-    # Extract Y stats
-    if isinstance(stats['Y_min'], list):
-        y_min = torch.stack(stats['Y_min'])
-        y_max = torch.stack(stats['Y_max'])
-    else:
-        y_min = stats['Y_min']
-        y_max = stats['Y_max']
-    
-    # Extract Context stats
-    c_min = stats.get('C_min', None)
-    c_max = stats.get('C_max', None)
-    
-    return y_min, y_max, c_min, c_max
+def normalize_data(Y1, Y2, C, Y_min_vals, Y_max_vals, C_min_val, C_max_val):
+    """Normalize Y1, Y2, and C using global min-max normalization based on training data statistics."""
+    epsilon = 1e-8
+    Y1_normalized = (Y1 - Y_min_vals) / (Y_max_vals - Y_min_vals + epsilon)
+    Y2_normalized = (Y2 - Y_min_vals) / (Y_max_vals - Y_min_vals + epsilon)
+    C_normalized = (C - C_min_val) / (C_max_val - C_min_val + epsilon)
 
-def normalize_data(tensor, min_val, max_val):
-    """Min-Max normalization to [0, 1]."""
-    denominator = max_val - min_val
-    denominator[denominator == 0] = 1.0
-    return (tensor - min_val) / denominator
+    return Y1_normalized, Y2_normalized, C_normalized
 
 def denormalize_data(tensor, min_val, max_val):
     """Reverts [0, 1] data back to original scale."""
     denominator = max_val - min_val
     return tensor * denominator + min_val
-
-def load_matched_data():
-    """
-    Loads matched insert/place data for ALL configured objects.
-    Reconstructs the Context [Avg_X, Avg_Y, Object_ID].
-    Returns RAW (un-normalized) tensors and a list of object names for plotting.
-    """
-    print(f"Loading paired data from {data_path}...")
-    
-    all_Y1 = []
-    all_Y2 = []
-    all_C = []
-    all_obj_names = [] # To track which trajectory belongs to which object
-
-    for obj_name, config in object_config.items():
-        obj_id = config['id']
-        obj_dir = os.path.join(data_path, obj_name)
-        
-        insert_file = os.path.join(obj_dir, 'insert_all.npy')
-        place_file = os.path.join(obj_dir, 'place_all.npy')
-        
-        if not os.path.exists(insert_file) or not os.path.exists(place_file):
-            print(f"Warning: Data files not found for {obj_name} in {obj_dir}. Skipping.")
-            continue
-
-        # Load arrays of dicts
-        insert_data = np.load(insert_file, allow_pickle=True)
-        place_data = np.load(place_file, allow_pickle=True)
-
-        # Extract Trajectories (Batch, Time, Dim)
-        curr_Y1 = [d['pose'][0][:, :3] for d in insert_data] 
-        curr_Y2 = [d['pose'][0][:, :3] for d in place_data]
-
-        # Limit for evaluation (e.g. top 50 per object)
-        top_x = min(50, len(curr_Y1))
-        curr_Y1 = curr_Y1[:top_x]
-        curr_Y2 = curr_Y2[:top_x]
-        
-        if len(curr_Y1) == 0: continue
-
-        # Stack
-        Y1_np = np.stack(curr_Y1)
-        Y2_np = np.stack(curr_Y2)
-        
-        # --- CONTEXT RECONSTRUCTION ---
-        # 1. Geometric: (Insert_End_XY + Place_Start_XY) / 2
-        insert_ends_xy = Y1_np[:, -1, :2]
-        place_starts_xy = Y2_np[:, 0, :2]
-        geom_context = (insert_ends_xy + place_starts_xy) / 2.0
-        
-        # 2. ID Context: Repeated scalar
-        id_context = np.full((len(Y1_np), 1), obj_id)
-        
-        # 3. Combine
-        C_np = np.concatenate([geom_context, id_context], axis=1)
-
-        all_Y1.append(Y1_np)
-        all_Y2.append(Y2_np)
-        all_C.append(C_np)
-        all_obj_names.extend([obj_name] * len(Y1_np))
-        
-        print(f"  Loaded {len(Y1_np)} pairs for {obj_name}")
-
-    # Aggregate
-    Y1_raw = torch.tensor(np.concatenate(all_Y1, axis=0), dtype=torch.float32)
-    Y2_raw = torch.tensor(np.concatenate(all_Y2, axis=0), dtype=torch.float32)
-    C_raw = torch.tensor(np.concatenate(all_C, axis=0), dtype=torch.float32)
-
-    print(f"Total loaded: {Y1_raw.shape[0]} pairs.")
-    return Y1_raw, Y2_raw, C_raw, all_obj_names
 
 def plot_training_progress():
     """Plots loss and error curves if they exist."""
@@ -186,27 +85,26 @@ def plot_training_progress():
     except FileNotFoundError:
         print("Training logs not found, skipping progress plot.")
 
-def calculate_success_rates_and_plot(device='cpu'):
+def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
     """
     Evaluates success based on Start (t=0) and End (t=1) point accuracy.
     Threshold: 5% (Strict) and 10% (Relaxed) of the global data range (per dimension).
     """
     print("\n--- CALCULATING SUCCESS RATES & PLOTTING ---")
-    
-    # Load Data & Stats
-    y_min, y_max, c_min, c_max = load_normalization_stats()
-    # Move normalization stats to the correct device
-    y_min = y_min.to(device)
-    y_max = y_max.to(device)
-    if c_min is not None:
-        c_min = c_min.to(device)
-    if c_max is not None:
-        c_max = c_max.to(device)
-    
-    Y1_raw, Y2_raw, C_raw, obj_names = load_matched_data()
+
+    # Load Data
+    full_dataset = ReassembleDataset(data_dir=base_data_folder)
+
+    # Load Normalization Stats
+    checkpoint = torch.load(os.path.join(save_path, "best_model.pth"))
+    norm_stats = checkpoint['norm_stats']
+    Y_min_vals, Y_max_vals, C_min_val, C_max_val = norm_stats['Y_min'], norm_stats['Y_max'], norm_stats['C_min'], norm_stats['C_max']
+
+    # Normalize data
+    full_dataset.Y1, full_dataset.Y2, full_dataset.C = normalize_data(full_dataset.Y1, full_dataset.Y2, full_dataset.C, Y_min_vals, Y_max_vals, C_min_val, C_max_val)
     
     # Determine Thresholds
-    global_range = (y_max - y_min).cpu().numpy()
+    global_range = Y_max_vals - Y_min_vals
     
     # Define scenarios: Label, Percentage, Threshold Vector
     scenarios = [
@@ -216,61 +114,57 @@ def calculate_success_rates_and_plot(device='cpu'):
     
     print(f"Global Range (X, Y, Z): {global_range}")
     
+    # Data dimensions
+    d_x = full_dataset.d_x
+    d_y1 = full_dataset.d_y1
+    d_y2 = full_dataset.d_y2
+    d_param = full_dataset.d_param
+    time_len = full_dataset.time_len
+
     # Load Model
-    d_x = 1
-    d_y1 = Y1_raw.shape[2] 
-    d_y2 = Y2_raw.shape[2] 
-    d_param = C_raw.shape[1] 
-    time_len = Y1_raw.shape[1] 
-    
-    # Move data to device
-    Y1_raw = Y1_raw.to(device)
-    Y2_raw = Y2_raw.to(device)
-    C_raw = C_raw.to(device)
-    
-    model = dual_cnmp_model.DualCNMP(d_x, d_y1, d_y2, d_param).to(device)
-    model_path = os.path.join(save_path, model_name)
-    
-    if not os.path.exists(model_path):
-        print(f"Model not found at {model_path}")
-        return
-
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model = temp_model.TempModel(d_x, d_y1, d_y2, d_param).to(device)
+    model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
-    
-    # Normalize Inputs
-    C_normalized = C_raw.clone()
-    if c_min is not None and c_max is not None:
-        C_normalized = normalize_data(C_raw, c_min, c_max)
 
-    # Run Inference ONCE for all data
-    t_steps = np.linspace(0, 1, time_len)
-    cond_idx = 0 # t=0
+    # Move bounds to device for denormalization
+    Y_min_vals = Y_min_vals.to(device)
+    Y_max_vals = Y_max_vals.to(device)
+
+    # Prepare the target time steps (all 200 points)
+    x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1)
     
-    # Store predictions to avoid re-running model for each threshold
-    predictions = [] # List of (pred_traj, gt_traj, obj_name)
+    predictions = []
     
-    print("Running Inference...")
-    for i in range(len(Y2_raw)):
-        # Prepare Condition
-        y_cond_raw = Y2_raw[i, cond_idx:cond_idx+1]
-        y_cond_norm = normalize_data(y_cond_raw, y_min, y_max)
-        cond_pts = [[t_steps[cond_idx], y_cond_norm]]
+    print("Running Zero-Shot Inference (Conditioning on Full Forward Trajectory)...")
+    for i in range(len(full_dataset)):
+        # 1. Grab the full Forward Trajectory (Condition)
+        y1_seq = full_dataset.Y1[i].unsqueeze(0).to(device)
         
-        curr_context = C_normalized[i]
+        # 2. Grab the Inverse Trajectory (Passed for signature, but ignored by p=1)
+        y2_seq = full_dataset.Y2[i].unsqueeze(0).to(device)
         
+        # 3. Context
+        curr_context = full_dataset.C[i].view(1, 1, -1).to(device)
+        
+        # 4. Run Inference (p=1 forces Decoder to use L_F to generate Inverse)
         with torch.no_grad():
-             means_norm, _ = model_predict.predict_inverse_inverse(
-                model, time_len, curr_context, cond_pts, d_x, d_y1, d_y2, device=device
-            )
+            output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=1)
+            
+        # 5. Extract the Predicted Inverse Trajectory
+        _, _, pred_mean_i, _ = output.chunk(4, dim=-1)
         
-        pred_traj = denormalize_data(means_norm, y_min, y_max).cpu().numpy()
-        gt_traj = Y2_raw[i].cpu().numpy()
+        # 6. Denormalize Predictions and Ground Truth to physical scale
+        pred_traj = denormalize_data(pred_mean_i.squeeze(0), Y_min_vals, Y_max_vals).cpu().numpy()
+        gt_traj = denormalize_data(full_dataset.Y2[i].to(device), Y_min_vals, Y_max_vals).cpu().numpy()
+        
+        # 7. Identify Object Type (Round = Paired/True, Square = Unpaired/False)
+        is_paired = full_dataset.valid_inverses[i]
+        obj_key = 'round_peg_4' if is_paired else 'square_peg_4'
         
         predictions.append({
             'pred': pred_traj,
             'gt': gt_traj,
-            'obj': obj_names[i]
+            'obj': obj_key
         })
 
     # Evaluate Success for Each Scenario
@@ -280,7 +174,7 @@ def calculate_success_rates_and_plot(device='cpu'):
 
     for s in scenarios:
         print(f"\nEvaluating Scenario: {s['label']}")
-        thresholds = s['thresh']
+        thresholds = s['thresh'].cpu().numpy()
         
         # Temp counters
         counts = {} 
@@ -315,8 +209,8 @@ def calculate_success_rates_and_plot(device='cpu'):
     print("\nGenerating Bar Chart...")
     
     # Data Preparation
-    labels = [object_config[o]['label'] for o in object_config] # ["Round Peg (Source)", "Square Peg (Target)"]
-    obj_keys = list(object_config.keys()) # ['round_peg_4', 'square_peg_4']
+    labels = [full_dataset.object_config[o]['label'] for o in full_dataset.object_config] # ["Round Peg (Source)", "Square Peg (Target)"]
+    obj_keys = list(full_dataset.object_config.keys()) # ['round_peg_4', 'square_peg_4']
     
     x = np.arange(len(labels))  # label locations
     width = 0.35  # width of the bars
@@ -558,14 +452,17 @@ def evaluate_random_trajectories(num_samples=6, device='cpu'):
     print(f"Evaluation plots saved to {save_file}")
 
 if __name__ == "__main__":
-    utils.seed_everything(42)
+    seed = 42
+    utils.seed_everything(seed)
     
     # Device configuration
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     if torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name(0)}")
+
+    base_data_folder = "data/paired_trajectories_insert_place"
     
     plot_training_progress()
-    calculate_success_rates_and_plot(device=device)
+    calculate_success_rates_and_plot(base_data_folder, device=device)
     evaluate_random_trajectories(num_samples=100, device=device)

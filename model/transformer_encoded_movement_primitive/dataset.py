@@ -16,8 +16,8 @@ class ReassembleDataset(Dataset):
         # 'paired': True  => Train on Forward AND Inverse
         # 'paired': False => Train on Forward ONLY (Mask Inverse)
         self.object_config = {
-            'round_peg_4':  {'id': 0.0, 'paired': True},
-            'square_peg_4': {'id': 1.0, 'paired': False} 
+            'round_peg_4':  {'id': 0.0, 'paired': True, 'label': 'Round Peg 4 (Source)'},
+            'square_peg_4': {'id': 1.0, 'paired': False, 'label': 'Square Peg 4 (Target)'} 
         }
 
         # Lists to hold data from ALL objects
