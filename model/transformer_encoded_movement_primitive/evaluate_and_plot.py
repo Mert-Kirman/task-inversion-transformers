@@ -10,13 +10,14 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-import model.dual_cnmp_latent_alignment.dual_cnmp_model as dual_cnmp_model
+from dataset import ReassembleDataset
+import model.transformer_encoded_movement_primitive.temp_model as temp_model
 import model.model_predict as model_predict
 import model.utils as utils
 
 # ================= CONFIGURATION =================
-run_id = "run_1772222405.2956579"
-save_path = f"model/dual_cnmp_latent_alignment/save/{run_id}"
+run_id = "run_20260315_041044"
+save_path = f"model/transformer_encoded_movement_primitive/save/{run_id}"
 
 # POINT TO THE PAIRED DATA FOLDER
 data_path = "data/paired_trajectories_insert_place" 
@@ -137,37 +138,21 @@ def load_matched_data():
 def plot_training_progress():
     """Plots loss and error curves if they exist."""
     try:
-        train_err = np.load(f'{save_path}/training_errors_mse.npy')
-        val_err = np.load(f'{save_path}/validation_errors_mse.npy')
-        losses = np.load(f'{save_path}/losses_log_prob.npy')
+        train_err = np.load(f'{save_path}/training_losses.npy')
+        val_err = np.load(f'{save_path}/validation_losses.npy')
 
         plt.figure(figsize=(15, 5))
-        
-        plt.subplot(1, 3, 1)
-        plt.plot(losses, label='Training Loss', color='orange', alpha=0.7)
-        plt.title('Log Probability Loss')
-        plt.xlabel('Step')
+        plt.plot(train_err, label='Train Loss')
+        val_epochs = np.arange(49, len(train_err), 50)
+        plt.plot(val_epochs, val_err, label='Val Loss')
+        plt.title('Log Probability Loss + Latent Alignment MSE Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
         plt.grid(True, alpha=0.3)
         plt.legend()
-
-        plt.subplot(1, 3, 2)
-        plt.plot(train_err, label='Train MSE', color='blue')
-        plt.plot(val_err, label='Val MSE', color='red', linestyle='--')
-        plt.title('Reconstruction Error (MSE)')
-        plt.xlabel('Epoch (x1000)')
-        plt.ylabel('MSE')
-        plt.grid(True, alpha=0.3)
-        plt.legend()
-        
-        plt.subplot(1, 3, 3)
-        plt.plot(train_err, label='Train MSE', color='blue')
-        plt.plot(val_err, label='Val MSE', color='red', linestyle='--')
-        plt.title('MSE (Log Scale)')
-        plt.yscale('log')
-        plt.grid(True, alpha=0.3, which="both")
 
         plt.tight_layout()
-        plot_save = f'{save_path}/training_progress_multi.png'
+        plot_save = f'{save_path}/training_progress.png'
         plt.savefig(plot_save)
         print(f"Training progress saved to {plot_save}")
         plt.close()
