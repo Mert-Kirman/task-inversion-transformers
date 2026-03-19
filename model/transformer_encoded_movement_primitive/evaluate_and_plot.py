@@ -248,208 +248,133 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
     plt.savefig(plot_path, dpi=300)
     print(f"Bar chart saved to {plot_path}")
 
-def evaluate_random_trajectories(num_samples=6, device='cpu'):
-    # 1. Load Norm Stats
-    y_min, y_max, c_min, c_max = load_normalization_stats()
-    # Move to correct device
-    y_min = y_min.to(device)
-    y_max = y_max.to(device)
-    if c_min is not None:
-        c_min = c_min.to(device)
-    if c_max is not None:
-        c_max = c_max.to(device)
+def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
+    print(f"\n--- EVALUATING RANDOM TRAJECTORIES ({num_samples} samples) ---")
+
+    # 1. Load Data & Stats
+    full_dataset = ReassembleDataset(data_dir=base_data_folder)
     
-    # 2. Load Raw Matched Data
-    Y1_raw, Y2_raw, C_raw, obj_names = load_matched_data()
-    
-    d_x = 1
-    d_y1 = Y1_raw.shape[2] 
-    d_y2 = Y2_raw.shape[2] 
-    d_param = C_raw.shape[1] # Should be 3 (AvgX, AvgY, ID)
-    time_len = Y1_raw.shape[1] 
-    num_demos = Y1_raw.shape[0]
+    checkpoint = torch.load(os.path.join(save_path, "best_model.pth"))
+    norm_stats = checkpoint['norm_stats']
+    Y_min_vals, Y_max_vals = norm_stats['Y_min'], norm_stats['Y_max']
+    C_min_val, C_max_val = norm_stats['C_min'], norm_stats['C_max']
 
-    # Move data to device
-    Y1_raw = Y1_raw.to(device)
-    Y2_raw = Y2_raw.to(device)
-    C_raw = C_raw.to(device)
+    # Keep a raw copy of Y2 for plotting ground truth before normalization alters it
+    Y2_raw = full_dataset.Y2.clone()
 
-    # --- NORMALIZE CONTEXT ---
-    # We must normalize C using the stats from training
-    C_normalized = C_raw.clone()
-    if c_min is not None and c_max is not None:
-        C_normalized = normalize_data(C_raw, c_min, c_max)
+    # Normalize dataset
+    full_dataset.Y1, full_dataset.Y2, full_dataset.C = normalize_data(
+        full_dataset.Y1, full_dataset.Y2, full_dataset.C, 
+        Y_min_vals, Y_max_vals, C_min_val, C_max_val
+    )
 
-    # 3. Load Model
-    model = dual_cnmp_model.DualCNMP(d_x, d_y1, d_y2, d_param).to(device)
-    model_path = os.path.join(save_path, model_name)
-    
-    if not os.path.exists(model_path):
-        print(f"Model not found at {model_path}")
-        return
+    d_x = full_dataset.d_x
+    d_y1 = full_dataset.d_y1 
+    d_y2 = full_dataset.d_y2 
+    d_param = full_dataset.d_param
+    time_len = full_dataset.time_len
+    num_demos = full_dataset.d_N
 
-    print(f"Loading model state from {model_path}...")
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    # 2. Load Model
+    model = temp_model.TempModel(d_x, d_y1, d_y2, d_param).to(device)
+    model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
-    # 4. Select Random Indices
+    Y_min_vals = Y_min_vals.to(device)
+    Y_max_vals = Y_max_vals.to(device)
+
+    # 3. Select Random Indices
     num_to_plot = min(num_samples, num_demos)
     indices = random.sample(range(num_demos), num_to_plot)
     
-    # 5. Define Condition Points
+    # Target time steps (Full Sequence)
     time_steps = np.linspace(0, 1, time_len)
-    cond_step_indices = [60] # Conditioning at t=0.3 (During Insert)
-    
-    # 6. Plot Setup
-    fig, axes = plt.subplots(num_to_plot, d_y1, figsize=(15, 4 * num_to_plot))
-    if num_to_plot == 1: axes = np.expand_dims(axes, 0) 
+    x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1)
 
     print(f"Evaluating indices: {indices}")
 
-    for row_idx, traj_idx in enumerate(indices):
-        curr_obj_name = obj_names[traj_idx]
+    # Define the evaluation modes (p=1 forces L_F, p=2 forces L_I)
+    modes = [
+        {'name': 'forward_condition', 'p': 1, 'title': 'Zero-Shot Inversion (Conditioned on Full Forward Trajectory)'},
+        {'name': 'inverse_condition', 'p': 2, 'title': 'Reconstruction (Conditioned on Full Inverse Trajectory)'}
+    ]
+
+    for mode in modes:
+        fig, axes = plt.subplots(num_to_plot, d_y2, figsize=(15, 4 * num_to_plot))
+        if num_to_plot == 1: axes = np.expand_dims(axes, 0) 
+
+        for row_idx, traj_idx in enumerate(indices):
+            # Identify Object Type
+            is_paired = full_dataset.valid_inverses[traj_idx]
+            curr_obj_name = full_dataset.object_config['round_peg_4']['label'] if is_paired else full_dataset.object_config['square_peg_4']['label']
+            
+            # --- A. Prepare Ground Truth ---
+            curr_y_truth_raw = Y2_raw[traj_idx].numpy() # Place Action (Inverse)
+            
+            # --- B. Prepare Sequences ---
+            y1_seq = full_dataset.Y1[traj_idx].unsqueeze(0).to(device)
+            y2_seq = full_dataset.Y2[traj_idx].unsqueeze(0).to(device)
+            curr_context = full_dataset.C[traj_idx].view(1, 1, -1).to(device)
+
+            # --- C. Run Inference ---
+            with torch.no_grad():
+                # Pass full sequences. The p=mode['p'] parameter forces the decoder to use the correct latent vector.
+                output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=mode['p'])
+                
+                # Extract the Inverse Trajectory predictions (Mean and Log-Variance)
+                _, _, pred_mean_i_norm, pred_std_i_norm = output.chunk(4, dim=-1)
+                
+                # Convert log variance parameter to standard deviation
+                pred_std_i_norm = torch.log(1 + torch.exp(pred_std_i_norm))
+                
+            # --- D. Denormalize Output ---
+            pred_mean_i_norm = pred_mean_i_norm.squeeze(0)
+            pred_std_i_norm = pred_std_i_norm.squeeze(0)
+
+            # Denormalize means back to workspace coordinates
+            means_pred = denormalize_data(pred_mean_i_norm, Y_min_vals, Y_max_vals).cpu().numpy()
+            
+            # Standard deviation scales linearly with the range of the workspace
+            y_range = (Y_max_vals - Y_min_vals).cpu().numpy()
+            stds_pred = pred_std_i_norm.cpu().numpy() * y_range
+
+            # --- E. Plotting ---
+            dim_labels = ["X (Place)", "Y (Place)", "Z (Place)"]
+            
+            for col_idx in range(d_y2):
+                ax = axes[row_idx, col_idx]
+                
+                # 1. Ground Truth
+                ax.plot(time_steps, curr_y_truth_raw[:, col_idx], 
+                        color='black', linestyle='-', linewidth=2, alpha=0.5, label='GT (Place)')
+                
+                # 2. Prediction
+                ax.plot(time_steps, means_pred[:, col_idx], 
+                        color='blue', linestyle='--', linewidth=2, label='Pred')
+                
+                # 3. Uncertainty
+                sigma = stds_pred[:, col_idx]
+                mean_curve = means_pred[:, col_idx]
+                ax.fill_between(time_steps, mean_curve - 2*sigma, mean_curve + 2*sigma, 
+                                color='blue', alpha=0.1, label='Uncertainty')
+
+                # Labels
+                if row_idx == 0:
+                    ax.set_title(dim_labels[col_idx], fontsize=14, fontweight='bold')
+                if col_idx == 0:
+                    ax.set_ylabel(f"{curr_obj_name}\nPair {traj_idx}", fontsize=9, fontweight='bold')
+
+                ax.grid(True, alpha=0.3)
+                if row_idx == 0 and col_idx == 0:
+                    ax.legend(fontsize='small', loc='best')
+
+        plt.suptitle(f"{mode['title']}\nModel ID: {run_id}", fontsize=16)
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.92) 
         
-        # --- A. Prepare Ground Truth ---
-        curr_y_truth_raw = Y2_raw[traj_idx].cpu().numpy() # Place Action (Inverse)
-        
-        # --- B. Prepare Input (Conditioning on Insert action) ---
-        # The model is predicting Y2 (Place) given Y1 (Insert)
-        condition_points = []
-        for t_idx in cond_step_indices:
-            t_val = time_steps[t_idx]
-            y_val_raw = Y1_raw[traj_idx, t_idx:t_idx+1]
-            y_val_norm = normalize_data(y_val_raw, y_min, y_max)
-            condition_points.append([t_val, y_val_norm])
-        
-        curr_context = C_normalized[traj_idx]
-
-        # --- C. Run Inference (Inverse Mode) ---
-        with torch.no_grad():
-            means_norm, stds_norm = model_predict.predict_inverse(
-                model, time_len, curr_context, condition_points, d_x, d_y1, d_y2, device=device
-            )
-            
-        # --- D. Denormalize Output ---
-        means_pred = denormalize_data(means_norm, y_min, y_max)
-        stds_pred = stds_norm * (y_max - y_min)
-
-        # --- E. Plotting ---
-        dim_labels = ["X (Place)", "Y (Place)", "Z (Place)"]
-        
-        for col_idx in range(d_y1):
-            ax = axes[row_idx, col_idx]
-            
-            # 1. Ground Truth
-            ax.plot(time_steps, curr_y_truth_raw[:, col_idx], 
-                    color='black', linestyle='-', linewidth=2, alpha=0.5, label='GT (Place)')
-            
-            # 2. Prediction
-            ax.plot(time_steps, means_pred[:, col_idx].cpu().numpy(), 
-                    color='blue', linestyle='--', linewidth=2, label='Pred')
-            
-            # 3. Uncertainty
-            sigma = stds_pred[:, col_idx].cpu().numpy()
-            mean_curve = means_pred[:, col_idx].cpu().numpy()
-            ax.fill_between(time_steps, mean_curve - 2*sigma, mean_curve + 2*sigma, 
-                            color='blue', alpha=0.1, label='Uncertainty')
-
-            # Labels
-            if row_idx == 0:
-                ax.set_title(dim_labels[col_idx], fontsize=14, fontweight='bold')
-            if col_idx == 0:
-                # Add Object Name to Y-Label for Clarity
-                ax.set_ylabel(f"{curr_obj_name}\nPair {traj_idx}", fontsize=9, fontweight='bold')
-
-            ax.grid(True, alpha=0.3)
-            if row_idx == 0 and col_idx == 0:
-                ax.legend(fontsize='small', loc='best')
-
-    plt.suptitle(f"Inverse Task Prediction (Round Peg vs Square Peg)\nModel: {model_name} | ID Context Included", fontsize=16)
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.92) 
-    
-    save_file = f'{save_path}/eval_multi_object_{num_to_plot}_forward_condition.png'
-    plt.savefig(save_file)
-    print(f"Evaluation plots saved to {save_file}")
-
-    # Condition from place action at t=0
-    cond_step_indices = [0]
-    
-    fig, axes = plt.subplots(num_to_plot, d_y1, figsize=(15, 4 * num_to_plot))
-    if num_to_plot == 1: axes = np.expand_dims(axes, 0) 
-
-    print(f"Evaluating indices: {indices}")
-
-    for row_idx, traj_idx in enumerate(indices):
-        curr_obj_name = obj_names[traj_idx]
-        
-        # --- A. Prepare Ground Truth ---
-        curr_y_truth_raw = Y2_raw[traj_idx].cpu().numpy() # Place Action (Inverse)
-        
-        # --- B. Prepare Input (Conditioning on Insert action) ---
-        # The model is predicting Y2 (Place) given Y1 (Insert)
-        condition_points = []
-        for t_idx in cond_step_indices:
-            t_val = time_steps[t_idx]
-            y_val_raw = Y2_raw[traj_idx, t_idx:t_idx+1]
-            y_val_norm = normalize_data(y_val_raw, y_min, y_max)
-            condition_points.append([t_val, y_val_norm])
-        
-        curr_context = C_normalized[traj_idx]
-
-        # --- C. Run Inference (Inverse Mode) ---
-        with torch.no_grad():
-            means_norm, stds_norm = model_predict.predict_inverse_inverse(
-                model, time_len, curr_context, condition_points, d_x, d_y1, d_y2, device=device
-            )
-            
-        # --- D. Denormalize Output ---
-        means_pred = denormalize_data(means_norm, y_min, y_max)
-        stds_pred = stds_norm * (y_max - y_min)
-
-        # --- E. Plotting ---
-        dim_labels = ["X (Place)", "Y (Place)", "Z (Place)"]
-        
-        for col_idx in range(d_y1):
-            ax = axes[row_idx, col_idx]
-            
-            # 1. Ground Truth
-            ax.plot(time_steps, curr_y_truth_raw[:, col_idx], 
-                    color='black', linestyle='-', linewidth=2, alpha=0.5, label='GT (Place)')
-            
-            # 2. Prediction
-            ax.plot(time_steps, means_pred[:, col_idx].cpu().numpy(), 
-                    color='blue', linestyle='--', linewidth=2, label='Pred')
-            
-            # 3. Uncertainty
-            sigma = stds_pred[:, col_idx].cpu().numpy()
-            mean_curve = means_pred[:, col_idx].cpu().numpy()
-            ax.fill_between(time_steps, mean_curve - 2*sigma, mean_curve + 2*sigma, 
-                            color='blue', alpha=0.1, label='Uncertainty')
-            
-            # 4. Conditioning Point
-            cond_y_raw = Y2_raw[traj_idx, cond_step_indices[0], col_idx].cpu().numpy()
-            ax.scatter(time_steps[cond_step_indices[0]], cond_y_raw, 
-                       color='red', s=80, marker='o', label='Condition Point')
-
-            # Labels
-            if row_idx == 0:
-                ax.set_title(dim_labels[col_idx], fontsize=14, fontweight='bold')
-            if col_idx == 0:
-                # Add Object Name to Y-Label for Clarity
-                ax.set_ylabel(f"{curr_obj_name}\nPair {traj_idx}", fontsize=9, fontweight='bold')
-
-            ax.grid(True, alpha=0.3)
-            if row_idx == 0 and col_idx == 0:
-                ax.legend(fontsize='small', loc='best')
-
-    plt.suptitle(f"Inverse Task Prediction (Round Peg vs Square Peg)\nModel: {model_name} | ID Context Included", fontsize=16)
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.92) 
-    
-    save_file = f'{save_path}/eval_multi_object_{num_to_plot}_inverse_condition.png'
-    plt.savefig(save_file)
-    print(f"Evaluation plots saved to {save_file}")
+        save_file = f'{save_path}/eval_multi_object_{num_to_plot}_{mode["name"]}.png'
+        plt.savefig(save_file)
+        print(f"Evaluation plots saved to {save_file}")
 
 if __name__ == "__main__":
     seed = 42
@@ -465,4 +390,4 @@ if __name__ == "__main__":
     
     plot_training_progress()
     calculate_success_rates_and_plot(base_data_folder, device=device)
-    evaluate_random_trajectories(num_samples=100, device=device)
+    evaluate_random_trajectories(base_data_folder, num_samples=100, device=device)
