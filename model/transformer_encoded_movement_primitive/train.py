@@ -282,7 +282,7 @@ if __name__ == "__main__":
     gradient_clip_norm = 5.0
     
     model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param, dropout_p=dropout_p).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
 
     # Save training configuration details
@@ -293,7 +293,7 @@ if __name__ == "__main__":
         'learning_rate': learning_rate,
         'weight_decay': weight_decay,
         'dropout_p': dropout_p,
-        'optimizer': 'Adam',
+        'optimizer': 'AdamW',
         'scheduler': 'CosineAnnealingLR',
         'device': str(device),
         'd_x': full_dataset.d_x,
