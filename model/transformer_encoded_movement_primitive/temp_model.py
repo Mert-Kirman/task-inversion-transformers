@@ -29,6 +29,9 @@ class TransformerTrajectoryEncoder(nn.Module):
         super().__init__()
         # 1. Project physical dimensions (e.g., 3) up to the Transformer's hidden dimension
         self.input_proj = nn.Linear(input_dim, d_model)
+
+        # The Continuous [MASK] Token: Tells the network "this coordinate is missing" during training, encouraging it to learn robust representations
+        self.mask_token = nn.Parameter(torch.randn(1, 1, d_model))
         
         # 2. Add time awareness
         self.pos_encoder = PositionalEncoding(d_model)
@@ -43,16 +46,28 @@ class TransformerTrajectoryEncoder(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
-    def forward(self, seq):
+    def forward(self, seq, mask_indices=None):
         # seq shape: (batch_size, time_len, input_dim)
+        # mask_indices shape: (batch_size, time_len) containing booleans (True = Mask this point)
+
+        # Project to d_model
         x = self.input_proj(seq) # (batch_size, time_len, d_model)
-        x = self.pos_encoder(x)
         
+        # Apply the [MASK] token
+        if mask_indices is not None:
+            # Expand boolean mask to match feature dimension
+            expanded_mask = mask_indices.unsqueeze(-1).expand(-1, -1, x.size(-1))
+            # Replace True indices with the learnable mask token
+            x = torch.where(expanded_mask, self.mask_token, x)
+
+        # Add time awareness to the known points AND the mask tokens
+        x = self.pos_encoder(x)
+
         # Process the whole sequence simultaneously
-        x = self.transformer(x)
+        encoded_seq = self.transformer(x)
         
         # Mean Pooling: Compress the time sequence into a single 256-dim context vector
-        latent = x.mean(dim=1) 
+        latent = encoded_seq.mean(dim=1) 
         
         return latent
 
@@ -113,7 +128,7 @@ class TempModel(nn.Module):
             nn.Linear(64, (d_y2)*2)
         )
 
-    def forward(self, y1_seq, y2_seq, params, x_tar, extra_pass, p=0):
+    def forward(self, y1_seq, y2_seq, params, x_tar, extra_pass, p=0, mask_indices_1=None, mask_indices_2=None):
         """
         y1_seq: (batch_size, time_len, d_y1)
         y2_seq: (batch_size, time_len, d_y2)
@@ -127,12 +142,12 @@ class TempModel(nn.Module):
         p_expanded = p_embedded.expand(-1, x_tar.shape[1], -1) # (batch, num_tar, 16)
 
         # 2. Encode Forward Trajectory
-        L_F = self.encoder1(y1_seq) # (batch, 256)
+        L_F = self.encoder1(y1_seq, mask_indices_1) # (batch, 256)
         L_F = L_F.unsqueeze(1).expand(-1, x_tar.shape[1], -1) # (batch, num_tar, 256)
 
         # 3. Encode Inverse Trajectory (Skip if extra_pass to save compute/avoid garbage data)
         if not extra_pass:
-            L_I = self.encoder2(y2_seq) # (batch, 256)
+            L_I = self.encoder2(y2_seq, mask_indices_2) # (batch, 256)
             L_I = L_I.unsqueeze(1).expand(-1, x_tar.shape[1], -1) # (batch, num_tar, 256)
         else:
             L_I = L_F # Dummy assignment for loss calculation to return 0

@@ -124,9 +124,23 @@ def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_rec
             y_tar_i = batch['y_tar_i'].to(device)
 
             optimizer.zero_grad()
+
+            batch_size = y1_seq.shape[0]
+            time_len = y1_seq.shape[1]
+            
+            mask1 = None
+            mask2 = None
+
+            # Choose a random drop probability for THIS specific batch (between 0% and 99%)
+            # This ensures the model learns to handle full sequences AND sparse points.
+            drop_prob = torch.rand(1).item() * 0.99 
+            
+            # Create boolean masks (True means replace with [MASK] token)
+            mask1 = torch.rand(batch_size, time_len, device=device) < drop_prob
+            mask2 = torch.rand(batch_size, time_len, device=device) < drop_prob
             
             # Forward pass
-            output, L_F, L_I, extra_pass = model(y1_seq, y2_seq, params, x_tar, extra_pass)
+            output, L_F, L_I, extra_pass = model(y1_seq, y2_seq, params, x_tar, extra_pass, mask_indices_1=mask1, mask_indices_2=mask2)
             
             # Loss calculation
             loss = temp_model.loss(output, y_tar_f, y_tar_i, d_y1, d_y2, d_param, L_F.squeeze(1), L_I.squeeze(1), extra_pass)
