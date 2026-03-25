@@ -68,7 +68,16 @@ class Logger(object):
         self.terminal.flush()
         self.log.flush()
 
-def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_reconstruction_loader, val_loader, d_y1, d_y2, d_param, save_folder, device, norm_stats):
+def get_grad_norm(model):
+    '''Calculate the total L2 norm of the gradients for all parameters in the model.'''
+    total_norm = 0.0
+    for p in model.parameters():
+        if p.grad is not None:
+            param_norm = p.grad.detach().data.norm(2)
+            total_norm += param_norm.item() ** 2
+    return total_norm ** 0.5
+
+def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_reconstruction_loader, val_loader, d_y1, d_y2, d_param, save_folder, device, norm_stats, gradient_clip_norm):
     sys.stdout = Logger(os.path.join(save_folder, 'train_log.txt'))
 
     composite_loss_list = []
@@ -78,12 +87,15 @@ def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_rec
     val_inv_mse_list = []
     best_val_inv_mse = float('inf')
 
+    grad_norm_list = []
+
     # Create an iterator for the reconstruction data
     rec_iter = iter(train_reconstruction_loader)
 
     for epoch in tqdm(range(EPOCHS), desc="Training Progress", unit="epoch"):
         model.train()
         epoch_train_loss = 0.0
+        epoch_grad_norm = 0.0
         
         # We loop over the paired (inversion) data to guarantee we see it all evenly
         for inv_batch in train_inversion_loader:
@@ -120,14 +132,19 @@ def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_rec
             loss = temp_model.loss(output, y_tar_f, y_tar_i, d_y1, d_y2, d_param, L_F.squeeze(1), L_I.squeeze(1), extra_pass)
             
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+            raw_grad_norm = get_grad_norm(model)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_norm)
             optimizer.step()
             
             epoch_train_loss += loss.item()
+            epoch_grad_norm += raw_grad_norm
             
         scheduler.step()
         avg_train_loss = epoch_train_loss / len(train_inversion_loader)
         composite_loss_list.append(avg_train_loss)
+
+        avg_grad_norm = epoch_grad_norm / len(train_inversion_loader)
+        grad_norm_list.append(avg_grad_norm)
         
         # --- Validation ---
         if (epoch + 1) % 50 == 0:
@@ -196,7 +213,9 @@ def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_rec
             np.save(os.path.join(save_folder, 'train_inv_mse.npy'), np.array(train_inv_mse_list))
             np.save(os.path.join(save_folder, 'val_inv_mse.npy'), np.array(val_inv_mse_list))
 
-            tqdm.write(f"Epoch {epoch}, Train Inv MSE: {avg_train_inv_mse:.6f}, Val Inv MSE: {avg_val_inv_mse:.6f}")
+            np.save(os.path.join(save_folder, 'grad_norms.npy'), np.array(grad_norm_list))
+
+            tqdm.write(f"Epoch {epoch}, Train Inv MSE: {avg_train_inv_mse:.6f}, Val Inv MSE: {avg_val_inv_mse:.6f}, Grad Norm: {avg_grad_norm:.4f}")
             
             # --- Save Best Model strictly based on Zero-Shot Inversion Performance ---
             if avg_val_inv_mse < best_val_inv_mse:
@@ -260,10 +279,11 @@ if __name__ == "__main__":
     learning_rate = 3e-4
     weight_decay = 1e-5
     dropout_p = [0.0, 0.0]
+    gradient_clip_norm = 5.0
     
     model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param, dropout_p=dropout_p).to(device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    scheduler = LambdaLR(optimizer, lr_lambda=lambda epoch: 1 if epoch < 40_000 else 5e-1)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
 
     # Save training configuration details
     training_details = {
@@ -274,7 +294,7 @@ if __name__ == "__main__":
         'weight_decay': weight_decay,
         'dropout_p': dropout_p,
         'optimizer': 'Adam',
-        'scheduler': 'LambdaLR (1.0 until 40k, then 0.5)',
+        'scheduler': 'CosineAnnealingLR',
         'device': str(device),
         'd_x': full_dataset.d_x,
         'd_y1': full_dataset.d_y1,
@@ -290,7 +310,7 @@ if __name__ == "__main__":
         'objects_config': str(full_dataset.object_config),
         'unpaired_training': True,
         'extra_pass_probability': 0.20,
-        'gradient_clip_norm': 5.0,
+        'gradient_clip_norm': gradient_clip_norm,
         'seed': seed
     }
     
@@ -317,5 +337,6 @@ if __name__ == "__main__":
         d_param=full_dataset.d_param, 
         save_folder=save_folder, 
         device=device,
-        norm_stats=norm_stats
+        norm_stats=norm_stats,
+        gradient_clip_norm=gradient_clip_norm
     )

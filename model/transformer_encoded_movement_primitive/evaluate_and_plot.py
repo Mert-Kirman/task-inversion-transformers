@@ -16,7 +16,7 @@ import model.model_predict as model_predict
 import model.utils as utils
 
 # ================= CONFIGURATION =================
-run_id = "run_20260315_222036"
+run_id = "run_20260325_204350"
 save_path = f"model/transformer_encoded_movement_primitive/save/{run_id}"
 # =================================================
 
@@ -33,6 +33,27 @@ def denormalize_data(tensor, min_val, max_val):
     """Reverts [0, 1] data back to original scale."""
     denominator = max_val - min_val
     return tensor * denominator + min_val
+
+def plot_grad_norms():
+    """Plots the gradient norms over epochs if they exist."""
+    try:
+        grad_norms = np.load(os.path.join(save_path, 'grad_norms.npy'))
+        plt.figure(figsize=(8, 5))
+        plt.plot(grad_norms, label='Gradient Norm')
+        window_size = 50
+        moving_avg = np.convolve(grad_norms, np.ones(window_size)/window_size, mode='valid')
+        plt.plot(range(window_size-1, len(grad_norms)), moving_avg, label=f'{window_size}-Epoch Moving Average')
+        plt.title('Gradient Norms Over Epochs')
+        plt.xlabel('Epoch')
+        plt.ylabel('L2 Norm of Gradients')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plot_save = os.path.join(save_path, 'gradient_norms.png')
+        plt.savefig(plot_save)
+        print(f"Gradient norms plot saved to {plot_save}")
+        plt.close()
+    except FileNotFoundError:
+        print("Gradient norms log not found, skipping gradient norm plot.")
 
 def plot_training_progress():
     """Plots loss and error curves if they exist."""
@@ -388,6 +409,7 @@ if __name__ == "__main__":
 
     base_data_folder = "data/paired_trajectories_insert_place"
     
+    plot_grad_norms()
     plot_training_progress()
     calculate_success_rates_and_plot(base_data_folder, device=device)
     evaluate_random_trajectories(base_data_folder, num_samples=100, device=device)
