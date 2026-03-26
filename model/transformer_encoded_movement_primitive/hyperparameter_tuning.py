@@ -45,22 +45,11 @@ def normalize_data(Y1, Y2, C, training_indices):
 
     return Y1_normalized, Y2_normalized, C_normalized, Y_min_vals, Y_max_vals, C_min_val, C_max_val
 
-def save_training_configs(save_folder, details_dict):
-    '''Save training configurations in a txt file for future reference'''
-    details_path = os.path.join(save_folder, 'training_configs.txt')
-    with open(details_path, 'w') as f:
-        for key, value in details_dict.items():
-            f.write(f"{key}: {value}\n")
-
 # --- W&B Sweep Training Function ---
 def sweep_train():
     # Initialize a new wandb run
     wandb.init()
     config = wandb.config
-
-    # Setup specific save folder for this W&B run
-    save_folder = f"model/transformer_encoded_movement_primitive/save/sweep_{wandb.run.name}"
-    os.makedirs(save_folder, exist_ok=True)
 
     # Recreate DataLoaders with the sweep's batch size
     train_inversion_loader = DataLoader(train_inversion_dataset, batch_size=config.batch_size, shuffle=True)
@@ -78,9 +67,6 @@ def sweep_train():
     # Initialize Optimizer and Scheduler
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs, eta_min=1e-6)
-
-    # Save configs locally as backup
-    save_training_configs(save_folder, dict(config))
 
     best_val_inv_mse = float('inf')
     rec_iter = iter(train_reconstruction_loader)
