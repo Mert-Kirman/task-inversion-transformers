@@ -178,13 +178,10 @@ def sweep_train():
                 "val_inv_mse": avg_val_inv_mse,
                 "learning_rate": scheduler.get_last_lr()[0]
             })
-
-            tqdm.write(f"Epoch {epoch}, Train Inv MSE: {avg_train_inv_mse:.6f}, Val Inv MSE: {avg_val_inv_mse:.6f}")
             
             # --- Track Best Metric for W&B ---
             if avg_val_inv_mse < best_val_inv_mse:
                 best_val_inv_mse = avg_val_inv_mse
-                tqdm.write(f"*** New Best Val Inversion MSE: {avg_val_inv_mse:.6f} ***")
                 
                 # Log best metric separately in wandb so you can easily sort your sweeps on the dashboard
                 wandb.run.summary["best_val_inv_mse"] = best_val_inv_mse
@@ -260,4 +257,4 @@ if __name__ == "__main__":
     sweep_id = wandb.sweep(sweep_config, project="temp-ablation-sweep")
 
     # Run the sweep agent
-    wandb.agent(sweep_id, sweep_train, count=200)
+    wandb.agent(sweep_id, sweep_train, count=300)
