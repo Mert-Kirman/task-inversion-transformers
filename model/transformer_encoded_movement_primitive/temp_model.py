@@ -73,15 +73,15 @@ class TransformerTrajectoryEncoder(nn.Module):
 
 
 class TempModel(nn.Module):
-    def __init__(self, d_x, d_y1, d_y2, d_param, dropout_p=[0.1, 0.0]):
+    def __init__(self, d_x, d_y1, d_y2, d_param, embedding_dim = 16, d_model = 256, nhead=4, num_layers=4, dropout_p=[0.1, 0.0]):
         super(TempModel, self).__init__()
 
         self.d_x = d_x
         self.d_y1 = d_y1
         self.d_y2 = d_y2
         self.param_dim = d_param
-        self.embedding_dim = 16
-        self.d_model = 256
+        self.embedding_dim = embedding_dim
+        self.d_model = d_model
 
         p_enc = dropout_p[0] # Probability for Encoder (Used in Transformer)
         p_dec = dropout_p[1] # Probability for Decoder (Used in MLP)
@@ -98,16 +98,16 @@ class TempModel(nn.Module):
         self.encoder1 = TransformerTrajectoryEncoder(
             input_dim=d_y1, 
             d_model=self.d_model, 
-            nhead=4, 
-            num_layers=4, 
+            nhead=nhead, 
+            num_layers=num_layers, 
             dropout=p_enc
         )
         
         self.encoder2 = TransformerTrajectoryEncoder(
             input_dim=d_y2, 
             d_model=self.d_model, 
-            nhead=4, 
-            num_layers=4, 
+            nhead=nhead, 
+            num_layers=num_layers, 
             dropout=p_enc
         )
 
@@ -181,14 +181,11 @@ class TempModel(nn.Module):
         return torch.cat((output1, output2), dim=-1), L_F, L_I, extra_pass
 
 
-def loss(output, target_f, target_i, d_y1, d_y2, d_param, L_F, L_I, extra_pass):
+def loss(output, target_f, target_i, d_y1, d_y2, d_param, L_F, L_I, extra_pass, lambda1=1.0, lambda2=0.01):
     # Standard log probability loss
     log_prob = loss_utils.log_prob_loss(output, target_f, target_i, d_y1, d_y2, d_param, extra_pass)
     
     # Raw Latent Alignment Loss (Preserves spatial magnitude)
     latent_alignment_loss = torch.mean((L_F - L_I) ** 2)
-
-    lambda1 = 1.0  
-    lambda2 = 0.01  # Scaled down to prevent overpowering log_prob
 
     return lambda1 * log_prob + lambda2 * latent_alignment_loss
