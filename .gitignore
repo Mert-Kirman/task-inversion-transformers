@@ -12,3 +12,4 @@ data/paired_trajectories_insert_place/
 data/warped_trajectories/
 data/plots_warped_full/
 wandb/
+*.csv
