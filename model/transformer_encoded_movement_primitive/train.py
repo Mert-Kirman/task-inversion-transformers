@@ -356,6 +356,6 @@ if __name__ == "__main__":
         device=device,
         norm_stats=norm_stats,
         gradient_clip_norm=gradient_clip_norm,
-        extra_pass_probability=extra_pass_prob,
+        extra_pass_prob=extra_pass_prob,
         mask_drop_prob_max=mask_drop_prob_max
     )
