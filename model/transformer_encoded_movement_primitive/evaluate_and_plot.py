@@ -16,7 +16,7 @@ import model.model_predict as model_predict
 import model.utils as utils
 
 # ================= CONFIGURATION =================
-run_id = "run_20260326_013516"
+run_id = "run_20260327_180150"
 save_path = f"model/transformer_encoded_movement_primitive/save/{run_id}"
 # =================================================
 

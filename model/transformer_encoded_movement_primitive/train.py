@@ -11,7 +11,6 @@ import numpy as np
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader, Subset
-from torch.optim.lr_scheduler import LambdaLR
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
@@ -77,7 +76,7 @@ def get_grad_norm(model):
             total_norm += param_norm.item() ** 2
     return total_norm ** 0.5
 
-def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_reconstruction_loader, val_loader, d_y1, d_y2, d_param, save_folder, device, norm_stats, gradient_clip_norm):
+def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_reconstruction_loader, val_loader, d_y1, d_y2, d_param, save_folder, device, norm_stats, gradient_clip_norm, extra_pass_prob, mask_drop_prob_max):
     sys.stdout = Logger(os.path.join(save_folder, 'train_log.txt'))
 
     composite_loss_list = []
@@ -101,7 +100,7 @@ def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_rec
         for inv_batch in train_inversion_loader:
             
             # Coin flip for THIS SPECIFIC BATCH
-            is_reconstruction_step = torch.rand(1).item() < 0.20
+            is_reconstruction_step = torch.rand(1).item() < extra_pass_prob
             
             if is_reconstruction_step:
                 try:
@@ -131,9 +130,9 @@ def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_rec
             mask1 = None
             mask2 = None
 
-            # Choose a random drop probability for THIS specific batch (between 0% and 99%)
+            # Choose a random drop probability for THIS specific batch
             # This ensures the model learns to handle full sequences AND sparse points.
-            drop_prob = torch.rand(1).item() * 0.99 
+            drop_prob = torch.rand(1).item() * mask_drop_prob_max
             
             # Create boolean masks (True means replace with [MASK] token)
             mask1 = torch.rand(batch_size, time_len, device=device) < drop_prob
@@ -290,10 +289,13 @@ if __name__ == "__main__":
     # -- MODEL, OPTIMIZER, SCHEDULER CONFIGURATION ---
     EPOCHS = 3001
     BATCH_SIZE = 16
-    learning_rate = 3e-4
-    weight_decay = 1e-5
-    dropout_p = [0.0, 0.0]
-    gradient_clip_norm = 5.0
+    learning_rate = 4.5e-4
+    weight_decay = 3.5e-5
+    dropout_p = [0.1, 0.0]
+    gradient_clip_norm = 3.0
+    
+    extra_pass_prob = 0.25
+    mask_drop_prob_max = 0.45
     
     model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param, dropout_p=dropout_p).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
@@ -323,7 +325,8 @@ if __name__ == "__main__":
         'C_shape': full_dataset.C.shape,
         'objects_config': str(full_dataset.object_config),
         'unpaired_training': True,
-        'extra_pass_probability': 0.20,
+        'extra_pass_probability': extra_pass_prob,
+        'mask_drop_prob_max': mask_drop_prob_max,
         'gradient_clip_norm': gradient_clip_norm,
         'seed': seed
     }
@@ -352,5 +355,7 @@ if __name__ == "__main__":
         save_folder=save_folder, 
         device=device,
         norm_stats=norm_stats,
-        gradient_clip_norm=gradient_clip_norm
+        gradient_clip_norm=gradient_clip_norm,
+        extra_pass_probability=extra_pass_prob,
+        mask_drop_prob_max=mask_drop_prob_max
     )

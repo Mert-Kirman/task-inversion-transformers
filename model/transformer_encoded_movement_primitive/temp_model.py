@@ -25,7 +25,7 @@ class PositionalEncoding(nn.Module):
 
 
 class TransformerTrajectoryEncoder(nn.Module):
-    def __init__(self, input_dim, d_model=256, nhead=4, num_layers=4, dropout=0.1):
+    def __init__(self, input_dim, d_model=256, nhead=8, num_layers=4, dropout=0.1):
         super().__init__()
         # 1. Project physical dimensions (e.g., 3) up to the Transformer's hidden dimension
         self.input_proj = nn.Linear(input_dim, d_model)
@@ -73,7 +73,7 @@ class TransformerTrajectoryEncoder(nn.Module):
 
 
 class TempModel(nn.Module):
-    def __init__(self, d_x, d_y1, d_y2, d_param, embedding_dim = 16, d_model = 256, nhead=4, num_layers=4, dropout_p=[0.1, 0.0]):
+    def __init__(self, d_x, d_y1, d_y2, d_param, embedding_dim = 16, d_model = 256, nhead=8, num_layers=4, dropout_p=[0.1, 0.0]):
         super(TempModel, self).__init__()
 
         self.d_x = d_x
@@ -181,7 +181,7 @@ class TempModel(nn.Module):
         return torch.cat((output1, output2), dim=-1), L_F, L_I, extra_pass
 
 
-def loss(output, target_f, target_i, d_y1, d_y2, d_param, L_F, L_I, extra_pass, lambda1=1.0, lambda2=0.01):
+def loss(output, target_f, target_i, d_y1, d_y2, d_param, L_F, L_I, extra_pass, lambda1=1.0, lambda2=0.1):
     # Standard log probability loss
     log_prob = loss_utils.log_prob_loss(output, target_f, target_i, d_y1, d_y2, d_param, extra_pass)
     
