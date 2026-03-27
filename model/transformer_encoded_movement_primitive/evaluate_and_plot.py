@@ -168,8 +168,9 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
         curr_context = full_dataset.C[i].view(1, 1, -1).to(device)
 
         # Condition points
+        condition_points = [0, -1] # t=0 and t=1 of the inverse trajectory corresponds to indices 0 and 199 (since time_len=200)
         eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
-        eval_mask[0, 0] = False # Set t=0 to False (Observed)(Single condition point, which is t=0 of the inverse trajectory)
+        eval_mask[0, condition_points] = False # Set condition points to False (Observed)
         
         # 4. Run Inference (p=2 forces Decoder to use L_I to generate Forward and Inverse trajectories)
         with torch.no_grad():
@@ -344,7 +345,7 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
             # --- C. Run Inference ---
             with torch.no_grad():
                 if mode['p'] == 1:
-                    # Condition point(s)
+                    # Condition on the Forward Trajectory
                     condition_points = [60] # t=0.3 of the forward trajectory corresponds to index 60 (since time_len=200)
                     eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
                     eval_mask[0, condition_points] = False # Set condition points to False (Observed)
@@ -352,8 +353,8 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
                     # The p=mode['p'] parameter forces the decoder to use the correct latent vector.
                     output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=mode['p'], mask_indices_1=eval_mask)
                 else:
-                    # Condition point(s)
-                    condition_points = [0] # t=0 of the inverse trajectory corresponds to index 0 (since time_len=200)
+                    # Condition on the Inverse Trajectory
+                    condition_points = [0, -1] # t=0 and t=1 of the inverse trajectory corresponds to indices 0 and 199 (since time_len=200)
                     eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
                     eval_mask[0, condition_points] = False # Set condition points to False (Observed)
 
@@ -399,7 +400,8 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
                 
                 # 4. Condition Points (Only for mode['p'] == 2 since that's where we condition on the inverse trajectory)
                 if mode['p'] == 2:
-                    ax.scatter(time_steps[0], curr_y_truth_raw[0, col_idx], color='red', s=80, marker='o', label='Condition Point')
+                    for idx in condition_points:
+                        ax.scatter(time_steps[idx], curr_y_truth_raw[idx, col_idx], color='red', marker='o', s=80, label='Condition Point' if idx == condition_points[0] else "")
 
                 # Labels
                 if row_idx == 0:
