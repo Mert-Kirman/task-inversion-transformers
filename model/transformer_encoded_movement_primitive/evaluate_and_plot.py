@@ -16,7 +16,7 @@ import model.model_predict as model_predict
 import model.utils as utils
 
 # ================= CONFIGURATION =================
-run_id = "run_20260315_222036"
+run_id = "run_20260327_180150"
 save_path = f"model/transformer_encoded_movement_primitive/save/{run_id}"
 # =================================================
 
@@ -33,6 +33,27 @@ def denormalize_data(tensor, min_val, max_val):
     """Reverts [0, 1] data back to original scale."""
     denominator = max_val - min_val
     return tensor * denominator + min_val
+
+def plot_grad_norms():
+    """Plots the gradient norms over epochs if they exist."""
+    try:
+        grad_norms = np.load(os.path.join(save_path, 'grad_norms.npy'))
+        plt.figure(figsize=(8, 5))
+        plt.plot(grad_norms, label='Gradient Norm')
+        window_size = 50
+        moving_avg = np.convolve(grad_norms, np.ones(window_size)/window_size, mode='valid')
+        plt.plot(range(window_size-1, len(grad_norms)), moving_avg, label=f'{window_size}-Epoch Moving Average')
+        plt.title('Gradient Norms Over Epochs')
+        plt.xlabel('Epoch')
+        plt.ylabel('L2 Norm of Gradients')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plot_save = os.path.join(save_path, 'gradient_norms.png')
+        plt.savefig(plot_save)
+        print(f"Gradient norms plot saved to {plot_save}")
+        plt.close()
+    except FileNotFoundError:
+        print("Gradient norms log not found, skipping gradient norm plot.")
 
 def plot_training_progress():
     """Plots loss and error curves if they exist."""
@@ -137,18 +158,23 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
     
     print("Running Zero-Shot Inference (Conditioning on Full Forward Trajectory)...")
     for i in range(len(full_dataset)):
-        # 1. Grab the full Forward Trajectory (Condition)
+        # 1. Grab the full Forward Trajectory
         y1_seq = full_dataset.Y1[i].unsqueeze(0).to(device)
         
-        # 2. Grab the Inverse Trajectory (Passed for signature, but ignored by p=1)
+        # 2. Grab the Inverse Trajectory
         y2_seq = full_dataset.Y2[i].unsqueeze(0).to(device)
         
         # 3. Context
         curr_context = full_dataset.C[i].view(1, 1, -1).to(device)
+
+        # Condition points
+        condition_points = [0, -1] # t=0 and t=1 of the inverse trajectory corresponds to indices 0 and 199 (since time_len=200)
+        eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
+        eval_mask[0, condition_points] = False # Set condition points to False (Observed)
         
-        # 4. Run Inference (p=1 forces Decoder to use L_F to generate Inverse)
+        # 4. Run Inference (p=2 forces Decoder to use L_I to generate Forward and Inverse trajectories)
         with torch.no_grad():
-            output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=1)
+            output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=2, mask_indices_2=eval_mask)
             
         # 5. Extract the Predicted Inverse Trajectory
         _, _, pred_mean_i, _ = output.chunk(4, dim=-1)
@@ -295,8 +321,8 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
 
     # Define the evaluation modes (p=1 forces L_F, p=2 forces L_I)
     modes = [
-        {'name': 'forward_condition', 'p': 1, 'title': 'Zero-Shot Inversion (Conditioned on Full Forward Trajectory)'},
-        {'name': 'inverse_condition', 'p': 2, 'title': 'Reconstruction (Conditioned on Full Inverse Trajectory)'}
+        {'name': 'forward_condition', 'p': 1, 'title': 'Zero-Shot Inversion (Conditioned on Forward Trajectory)'},
+        {'name': 'inverse_condition', 'p': 2, 'title': 'Reconstruction (Conditioned on Inverse Trajectory)'}
     ]
 
     for mode in modes:
@@ -318,9 +344,23 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
 
             # --- C. Run Inference ---
             with torch.no_grad():
-                # Pass full sequences. The p=mode['p'] parameter forces the decoder to use the correct latent vector.
-                output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=mode['p'])
-                
+                if mode['p'] == 1:
+                    # Condition on the Forward Trajectory
+                    condition_points = [60] # t=0.3 of the forward trajectory corresponds to index 60 (since time_len=200)
+                    eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
+                    eval_mask[0, condition_points] = False # Set condition points to False (Observed)
+
+                    # The p=mode['p'] parameter forces the decoder to use the correct latent vector.
+                    output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=mode['p'], mask_indices_1=eval_mask)
+                else:
+                    # Condition on the Inverse Trajectory
+                    condition_points = [0, -1] # t=0 and t=1 of the inverse trajectory corresponds to indices 0 and 199 (since time_len=200)
+                    eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
+                    eval_mask[0, condition_points] = False # Set condition points to False (Observed)
+
+                    # The p=mode['p'] parameter forces the decoder to use the correct latent vector.
+                    output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=mode['p'], mask_indices_2=eval_mask)
+
                 # Extract the Inverse Trajectory predictions (Mean and Log-Variance)
                 _, _, pred_mean_i_norm, pred_std_i_norm = output.chunk(4, dim=-1)
                 
@@ -357,6 +397,11 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
                 mean_curve = means_pred[:, col_idx]
                 ax.fill_between(time_steps, mean_curve - 2*sigma, mean_curve + 2*sigma, 
                                 color='blue', alpha=0.1, label='Uncertainty')
+                
+                # 4. Condition Points (Only for mode['p'] == 2 since that's where we condition on the inverse trajectory)
+                if mode['p'] == 2:
+                    for idx in condition_points:
+                        ax.scatter(time_steps[idx], curr_y_truth_raw[idx, col_idx], color='red', marker='o', s=80, label='Condition Point' if idx == condition_points[0] else "")
 
                 # Labels
                 if row_idx == 0:
@@ -388,6 +433,7 @@ if __name__ == "__main__":
 
     base_data_folder = "data/paired_trajectories_insert_place"
     
+    plot_grad_norms()
     plot_training_progress()
     calculate_success_rates_and_plot(base_data_folder, device=device)
     evaluate_random_trajectories(base_data_folder, num_samples=100, device=device)
