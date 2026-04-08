@@ -187,7 +187,7 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
         
         # 7. Identify Object Type dynamically via Context ID
         curr_context_norm = full_dataset.C[i]
-        raw_id = denormalize_data(curr_context_norm, C_min_val, C_max_val)[0].item()
+        raw_id = denormalize_data(curr_context_norm, C_min_val, C_max_val)[-1].item()
         
         obj_key = None
         min_diff = float('inf')
@@ -246,7 +246,7 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
     
     # Only plot objects that actually appeared in the test set evaluation
     evaluated_obj_keys = list(obj_counts.keys())
-    labels = [full_dataset.object_config[k]['label'] for k in evaluated_obj_keys]
+    labels = [f"{full_dataset.object_config[k]['label']} (n={obj_counts[k]})" for k in evaluated_obj_keys]
     
     x = np.arange(len(labels))  # label locations
     width = 0.35  # width of the bars
@@ -263,9 +263,9 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
     ax.set_xticks(x)
     
     # Rotate labels so they don't overlap
-    ax.set_xticklabels(labels, fontsize=10, fontweight='bold', rotation=45, ha='right')
-    ax.set_ylim(0, 110)
-    ax.legend(loc='upper right', fontsize=10)
+    ax.set_xticklabels(labels, fontsize=8, fontweight='bold', rotation=45, ha='right')
+    ax.set_ylim(0, 130)
+    ax.legend(loc='upper center', ncol=2, fontsize=10)
     ax.grid(axis='y', linestyle='--', alpha=0.5)
     
     # Add Value Labels on top of bars
@@ -274,9 +274,12 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
             height = rect.get_height()
             ax.annotate(f'{height:.1f}%',
                         xy=(rect.get_x() + rect.get_width() / 2, height),
-                        xytext=(0, 3),  # 3 points vertical offset
+                        xytext=(0, 5),
                         textcoords="offset points",
-                        ha='center', va='bottom', fontweight='bold')
+                        ha='center', va='bottom', 
+                        fontweight='bold',
+                        fontsize=6,
+                        rotation=45)    # Rotate text to prevent horizontal collision
 
     autolabel(rects1)
     autolabel(rects2)
@@ -346,7 +349,7 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
         for row_idx, traj_idx in enumerate(indices):
             # Identify Object Type dynamically via Context ID
             curr_context_norm = full_dataset.C[traj_idx]
-            raw_id = denormalize_data(curr_context_norm, C_min_val, C_max_val)[0].item()
+            raw_id = denormalize_data(curr_context_norm, C_min_val, C_max_val)[-1].item()
             
             curr_obj_name = "Unknown"
             min_diff = float('inf')
@@ -455,7 +458,7 @@ if __name__ == "__main__":
 
     base_data_folder = "data/paired_trajectories_insert_place"
     
-    plot_grad_norms()
-    plot_training_progress()
+    # plot_grad_norms()
+    # plot_training_progress()
     calculate_success_rates_and_plot(base_data_folder, device=device)
-    evaluate_random_trajectories(base_data_folder, num_samples=100, device=device)
+    # evaluate_random_trajectories(base_data_folder, num_samples=100, device=device)
