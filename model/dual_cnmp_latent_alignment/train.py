@@ -14,19 +14,33 @@ import model.dual_cnmp_latent_alignment.dual_cnmp_model as dual_cnmp_model
 import model.utils as utils
 from tqdm import tqdm
 from torch.optim.lr_scheduler import LambdaLR
-import time
+from sklearn.model_selection import train_test_split
+from datetime import datetime
 
 
 # Function for saving training configurations (epoch count, batch size, input dimensions, model name etc) in a txt file
-def save_training_configs(save_folder, run_id, details_dict):
-    details_path = os.path.join(save_folder, f'run_{run_id}', 'training_configs.txt')
+def save_training_configs(save_folder, details_dict):
+    details_path = os.path.join(save_folder, 'training_configs.txt')
     with open(details_path, 'w') as f:
         for key, value in details_dict.items():
             f.write(f"{key}: {value}\n")
 
-def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_max, d_x, d_y1, d_y2, d_param, time_len, validation_indices, training_indices, save_folder, run_id, device, batch_size=16, unpaired_traj=True):
-    os.makedirs(f'model/dual_cnmp_latent_alignment/logs/run_{run_id}/', exist_ok=True)
-    sys.stdout = open(f'model/dual_cnmp_latent_alignment/logs/run_{run_id}/train_log.txt', 'w')
+class Logger(object):
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, "w")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)  
+        self.log.flush() # Force write to disk immediately
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
+def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_max, d_x, d_y1, d_y2, d_param, time_len, training_indices, validation_indices, test_indices, save_folder, run_id, device, batch_size=16, unpaired_traj=True):
+    sys.stdout = Logger(os.path.join(save_folder, 'train_log.txt'))
 
     training_errors = []
     validation_errors = []
@@ -44,7 +58,7 @@ def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_ma
 
         # Force the sampling to happen on the CPU
         obs, params, mask, x_tar, y_tar_f, y_tar_i, extra_pass = dual_cnmp_model.get_training_sample(
-            extra_pass, valid_inverses, validation_indices, demo_data, 
+            extra_pass, valid_inverses, validation_indices, test_indices, demo_data, 
             obs_max, d_N, d_x, d_y1, d_y2, d_param, time_len, 
             batch_size=batch_size, device="cpu"
         )
@@ -69,7 +83,7 @@ def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_ma
         optimizer.step()
         scheduler.step()
 
-        if i > 0 and i % 50 == 0:
+        if i > 0 and i % 400 == 0:
             epoch_train_error = validate_model.val_only_extra(model, training_indices, i, demo_data, d_x, d_y1, d_y2, time_len=time_len, device=device)
             training_errors.append(epoch_train_error if isinstance(epoch_train_error, (int, float)) else epoch_train_error.item())
 
@@ -79,20 +93,21 @@ def train(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_ma
             losses.append(loss.item())
 
             # Save errors and losses
-            np.save(f'{save_folder}/run_{run_id}/training_errors_mse.npy', np.array(training_errors))
-            np.save(f'{save_folder}/run_{run_id}/validation_errors_mse.npy', np.array(validation_errors))
-            np.save(f'{save_folder}/run_{run_id}/losses_log_prob.npy', np.array(losses))
+            np.save(f'{save_folder}/training_errors_mse.npy', np.array(training_errors))
+            np.save(f'{save_folder}/validation_errors_mse.npy', np.array(validation_errors))
+            np.save(f'{save_folder}/losses_log_prob.npy', np.array(losses))
 
             if min(validation_errors) == validation_errors[-1]:
                 # Save model
                 tqdm.write(f"Run ID: {run_id}, Saved model epoch {i}, Train loss: {loss.item():6f}, Validation error: {epoch_val_error:6f}")
-                torch.save(model.state_dict(), f'{save_folder}/run_{run_id}/best_model.pth')
+                torch.save(model.state_dict(), f'{save_folder}/best_model.pth')
 
     return training_errors, validation_errors, losses
 
 
 if __name__ == "__main__":
-    utils.seed_everything(42)
+    seed = 42
+    utils.seed_everything(seed)
 
     # --- DEVICE CONFIGURATION ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -107,8 +122,40 @@ if __name__ == "__main__":
     # 'paired': True  => Train on Forward AND Inverse
     # 'paired': False => Train on Forward ONLY (Mask Inverse)
     object_config = {
-        'round_peg_4':  {'id': 0.0, 'paired': True},
-        'square_peg_4': {'id': 1.0, 'paired': False} 
+        # ==========================================
+        # PAIRED CATEGORIES (The Teachers)
+        # ==========================================
+        
+        # Category 1: Radially Symmetric 
+        'round_peg_1':  {'id': 0.0, 'paired': True,  'label': 'Round Peg 1'},
+        'round_peg_2':  {'id': 1.0, 'paired': True,  'label': 'Round Peg 2'},
+        'round_peg_3':  {'id': 2.0, 'paired': True,  'label': 'Round Peg 3'},
+        'round_peg_4':  {'id': 3.0, 'paired': True,  'label': 'Round Peg 4'},
+        
+        # Category 2: Meshing / Rotational
+        'small_gear':   {'id': 4.0, 'paired': True,  'label': 'Small Gear'},
+        'medium_gear':  {'id': 5.0, 'paired': True,  'label': 'Medium Gear'},
+        'large_gear':   {'id': 6.0, 'paired': True,  'label': 'Large Gear'},
+        
+        # Category 3: Asymmetric Connectors & Fasteners
+        'bnc':          {'id': 7.0, 'paired': True,  'label': 'BNC Connector'},
+        'bolt_4':       {'id': 8.0, 'paired': True,  'label': 'Bolt 4 / Nut'},
+        'd-sub':        {'id': 9.0, 'paired': True,  'label': 'D-SUB Connector'},
+        'ethernet':     {'id': 10.0, 'paired': True,  'label': 'Ethernet Connector'},
+        'waterproof':   {'id': 11.0, 'paired': True,  'label': 'Waterproof Connector'},
+
+        # ==========================================
+        # UNPAIRED CATEGORIES (Zero-Shot Targets)
+        # ==========================================
+        
+        # Zero-Shot Test 1: Corners & Edges (Highly Geometric, No Rotational Symmetry)
+        'square_peg_1': {'id': 12.0, 'paired': False, 'label': 'Square Peg 1 (Unpaired)'},
+        'square_peg_2': {'id': 13.0, 'paired': False, 'label': 'Square Peg 2 (Unpaired)'},
+        'square_peg_3': {'id': 14.0, 'paired': False, 'label': 'Square Peg 3 (Unpaired)'},
+        'square_peg_4': {'id': 15.0, 'paired': False, 'label': 'Square Peg 4 (Unpaired)'},
+        
+        # Zero-Shot Test 2: Highly Asymmetric Alien Shape
+        'usb':          {'id': 16.0, 'paired': False, 'label': 'USB Connector (Unpaired)'}
     }
 
     # Lists to hold data from ALL objects
@@ -193,42 +240,6 @@ if __name__ == "__main__":
     print(f"  C  (Context): {C.shape}")
     print(f"  valid_inverses count: {len(valid_inverses)} (True={sum(valid_inverses)}, False={len(valid_inverses)-sum(valid_inverses)})")
 
-    # --- NORMALIZATION (Min-Max) ---
-    print("Normalizing Data (Global Min-Max)...")
-    
-    Y_min_vals = []
-    Y_max_vals = []
-    
-    # Normalize Trajectories
-    for dim in range(Y1.shape[2]):
-        min_dim = torch.minimum(Y1[:, :, dim].min(), Y2[:, :, dim].min())
-        max_dim = torch.maximum(Y1[:, :, dim].max(), Y2[:, :, dim].max())
-        
-        Y_min_vals.append(min_dim)
-        Y_max_vals.append(max_dim)
-        
-        denominator = max_dim - min_dim
-        
-        if denominator == 0:
-            Y1[:, :, dim] = 0.0 
-            Y2[:, :, dim] = 0.0
-        else:
-            Y1[:, :, dim] = (Y1[:, :, dim] - min_dim) / denominator
-            Y2[:, :, dim] = (Y2[:, :, dim] - min_dim) / denominator
-
-    # Normalize Context (C)
-    # Note: For ID dimension (dim 2), if IDs are 0 and 1, 
-    # min=0, max=1, so (val-0)/1 = val. The IDs 0.0 and 1.0 will be preserved.
-    C_min_val = C.min(dim=0)[0]
-    C_max_val = C.max(dim=0)[0]
-    C_denom = C_max_val - C_min_val
-    
-    C_denom[C_denom == 0] = 1.0 
-    
-    C = (C - C_min_val) / C_denom
-    
-    print(f"Context Normalized. Range: [{C.min()}, {C.max()}]")
-
     # --- SETUP TRAINING VARIABLES ---
     num_demo = Y1.shape[0]
     time_len = Y1.shape[1]
@@ -241,40 +252,83 @@ if __name__ == "__main__":
     d_param = C.shape[1] 
     d_y1 = Y1.shape[2]   
     d_y2 = Y2.shape[2]   
-
     OBS_MAX = 10
-    d_N = num_demo
 
-    # Split Train/Val
-    all_indices = set(range(num_demo))
-    validation_indices = [i for i in range(0, num_demo, 5)]
-    print(f"Validation Set Size: {len(validation_indices)}")
-    training_indices = list(all_indices - set(validation_indices))
+    # Split Train/Val/Test (70% / 15% / 15%)
+    # Split off the Test set (15% of total data)
+    train_val_idx, test_indices = train_test_split(
+        range(num_demo), 
+        test_size=0.15, 
+        stratify=valid_inverses,
+        random_state=seed
+    )
+
+    # Extract labels for the remaining 85% to stratify again
+    train_val_labels = [valid_inverses[i] for i in train_val_idx]
+
+    # Split remainder into Train (70%) and Val (15%)
+    training_indices, validation_indices = train_test_split(
+        train_val_idx, 
+        test_size=0.1764, 
+        stratify=train_val_labels,
+        random_state=seed
+    )
+    
+    print(f"Split sizes -> Train: {len(training_indices)}, Val: {len(validation_indices)}, Test: {len(test_indices)}")
+
+    # --- NORMALIZATION (Strictly on Training Data) ---
+    print("Normalizing Data (Global Min-Max from Training Set)...")
+    
+    Y1_train = Y1[training_indices]
+    Y2_train = Y2[training_indices]
+    C_train = C[training_indices]
+
+    # Combine Y1 and Y2 to find absolute physical workspace boundaries
+    Y_train_combined = torch.cat([Y1_train, Y2_train], dim=0)
+    
+    Y_min_vals = torch.amin(Y_train_combined, dim=(0, 1))
+    Y_max_vals = torch.amax(Y_train_combined, dim=(0, 1))
+
+    C_min_val = torch.min(C_train, dim=0).values
+    C_max_val = torch.max(C_train, dim=0).values
+
+    epsilon = 1e-8
+    
+    # Apply to entire dataset
+    Y1 = (Y1 - Y_min_vals) / (Y_max_vals - Y_min_vals + epsilon)
+    Y2 = (Y2 - Y_min_vals) / (Y_max_vals - Y_min_vals + epsilon)
+    C = (C - C_min_val) / (C_max_val - C_min_val + epsilon)
+
+    # --- SAVE FOLDER SETUP ---
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_folder = f"model/dual_cnmp_latent_alignment/save/run_{run_id}"
+    os.makedirs(save_folder, exist_ok=True)
+
+    # Save Test Indices for Evaluation Script
+    np.save(os.path.join(save_folder, 'test_indices.npy'), np.array(test_indices))
+
+    # Save Normalization Constants
+    print("Saving Normalization Stats...")
+    np.save(f'{save_folder}/normalization_stats.npy', {
+        'Y_min': Y_min_vals.cpu(),
+        'Y_max': Y_max_vals.cpu(),
+        'C_min': C_min_val.cpu(),
+        'C_max': C_max_val.cpu()
+    })
 
     demo_data = [X1, X2, Y1, Y2, C]
 
-    save_folder = f"model/dual_cnmp_latent_alignment/save"
-    run_id = time.time()
-    os.makedirs(f'{save_folder}/run_{run_id}', exist_ok=True)
-
-    # Save Normalization Constants for Inference
-    print("Saving Normalization Stats...")
-    np.save(f'{save_folder}/run_{run_id}/normalization_stats.npy', {
-        'Y_min': [v.cpu() if torch.is_tensor(v) else v for v in Y_min_vals],
-        'Y_max': [v.cpu() if torch.is_tensor(v) else v for v in Y_max_vals],
-        'C_min': C_min_val.cpu() if torch.is_tensor(C_min_val) else C_min_val,
-        'C_max': C_max_val.cpu() if torch.is_tensor(C_max_val) else C_max_val
-    })
-
-    EPOCHS = 4001
-    BATCH_SIZE = 16
-    learning_rate = 3e-4
+    # --- TRAINING HYPERPARAMETERS ---
+    # Increased to 18000 to match the ~18k gradient steps taken by the TEMP architecture
+    EPOCHS = 18000 
+    BATCH_SIZE = 32
+    learning_rate = 1e-3
     weight_decay = 1e-5
     dropout_p = [0.0, 0.0]
     
     model = dual_cnmp_model.DualCNMP(d_x, d_y1, d_y2, d_param, dropout_p=dropout_p).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    scheduler = LambdaLR(optimizer, lr_lambda=lambda epoch: 1 if epoch < 40_000 else 5e-1)
+    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
 
     # Save training configuration details
     training_details = {
@@ -284,8 +338,8 @@ if __name__ == "__main__":
         'learning_rate': learning_rate,
         'weight_decay': weight_decay,
         'dropout_p': dropout_p,
-        'optimizer': 'Adam',
-        'scheduler': 'LambdaLR (1.0 until 40k, then 0.5)',
+        'optimizer': 'AdamW',
+        'scheduler': 'CosineAnnealingLR',
         'device': str(device),
         'd_x': d_x,
         'd_y1': d_y1,
@@ -306,12 +360,12 @@ if __name__ == "__main__":
         'seed': 42
     }
     
-    save_training_configs(save_folder, run_id, training_details)
+    save_training_configs(save_folder, training_details)
     print(f"\nTraining configurations saved to run_{run_id}/training_configs.txt")
 
     training_errors, validation_errors, losses = train(
         model, optimizer, scheduler, EPOCHS, 
-        valid_inverses, demo_data, OBS_MAX, d_x, d_y1, d_y2, d_param, time_len,
-        validation_indices, training_indices, save_folder, run_id, device, 
+        valid_inverses, demo_data, OBS_MAX, d_x, d_y1, d_y2, d_param, time_len, 
+        training_indices, validation_indices, test_indices, save_folder, run_id, device, 
         batch_size=BATCH_SIZE, unpaired_traj=True
     )

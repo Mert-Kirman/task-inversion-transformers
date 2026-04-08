@@ -259,7 +259,7 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
     
     # Styling
     ax.set_ylabel('Success Rate (%)', fontsize=12, fontweight='bold')
-    ax.set_title('Task Extrapolation Success Rates (Test Set)', fontsize=14, fontweight='bold')
+    ax.set_title('Task Extrapolation Success Rates (Test Set)\nTEMP', fontsize=14, fontweight='bold')
     ax.set_xticks(x)
     
     # Rotate labels so they don't overlap
@@ -458,7 +458,7 @@ if __name__ == "__main__":
 
     base_data_folder = "data/paired_trajectories_insert_place"
     
-    # plot_grad_norms()
-    # plot_training_progress()
+    plot_grad_norms()
+    plot_training_progress()
     calculate_success_rates_and_plot(base_data_folder, device=device)
-    # evaluate_random_trajectories(base_data_folder, num_samples=100, device=device)
+    evaluate_random_trajectories(base_data_folder, num_samples=100, device=device)

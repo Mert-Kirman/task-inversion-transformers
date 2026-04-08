@@ -128,7 +128,7 @@ class DualCNMP(nn.Module):
         # (batch_size, num_tar, 2*d_y1 + 2*d_y2)
         return torch.cat((output1, output2), dim=-1), L_F, L_I, extra_pass
     
-def get_training_sample(extra_pass, valid_inverses, validation_indices, demo_data, 
+def get_training_sample(extra_pass, valid_inverses, validation_indices, test_indices, demo_data, 
                         OBS_MAX, d_N, d_x, d_y1, d_y2, d_param, time_len, batch_size=1, device='cpu'):
 
     X1, X2, Y1, Y2, C = demo_data
@@ -136,7 +136,7 @@ def get_training_sample(extra_pass, valid_inverses, validation_indices, demo_dat
     traj_multinom = torch.ones(d_N, device=device) # multinomial distribution for trajectories
 
     for i in range(d_N):
-       if i in validation_indices:
+       if i in validation_indices or i in test_indices:
            traj_multinom[i] = 0
 
     if not extra_pass:
