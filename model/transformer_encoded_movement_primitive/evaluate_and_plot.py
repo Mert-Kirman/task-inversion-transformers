@@ -16,7 +16,7 @@ import model.model_predict as model_predict
 import model.utils as utils
 
 # ================= CONFIGURATION =================
-run_id = "run_20260327_180150"
+run_id = "run_20260408_204033"
 save_path = f"model/transformer_encoded_movement_primitive/save/{run_id}"
 # =================================================
 
@@ -40,7 +40,7 @@ def plot_grad_norms():
         grad_norms = np.load(os.path.join(save_path, 'grad_norms.npy'))
         plt.figure(figsize=(8, 5))
         plt.plot(grad_norms, label='Gradient Norm')
-        window_size = 50
+        window_size = 20
         moving_avg = np.convolve(grad_norms, np.ones(window_size)/window_size, mode='valid')
         plt.plot(range(window_size-1, len(grad_norms)), moving_avg, label=f'{window_size}-Epoch Moving Average')
         plt.title('Gradient Norms Over Epochs')
@@ -71,7 +71,7 @@ def plot_training_progress():
         plt.subplot(1, 3, 1)
         plt.plot(composite_losses, label='Composite Loss (Log Prob + Latent Alignment MSE)')
         # Add a moving average for cleaner visualization
-        window_size = 50
+        window_size = 20
         moving_avg = np.convolve(composite_losses, np.ones(window_size)/window_size, mode='valid')
         plt.plot(range(window_size-1, len(composite_losses)), moving_avg, label=f'{window_size}-Epoch Moving Average')
         plt.title('Training Loss')
@@ -84,7 +84,7 @@ def plot_training_progress():
         plt.plot(train_fwd_mse, label='Train Forward MSE')
         plt.plot(val_fwd_mse, label='Val Forward MSE')
         plt.title('Forward MSE')
-        plt.xlabel('Epoch (x50)')
+        plt.xlabel('Epoch (x20)')
         plt.ylabel('MSE')
         plt.grid(True, alpha=0.3)
         plt.legend()
@@ -93,7 +93,7 @@ def plot_training_progress():
         plt.plot(train_inv_mse, label='Train Inverse MSE')
         plt.plot(val_inv_mse, label='Val Inverse MSE')
         plt.title('Inverse MSE')
-        plt.xlabel('Epoch (x50)')
+        plt.xlabel('Epoch (x20)')
         plt.ylabel('MSE')
         plt.grid(True, alpha=0.3)
         plt.legend()
@@ -185,9 +185,17 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
         pred_traj = denormalize_data(pred_mean_i.squeeze(0), Y_min_vals, Y_max_vals).cpu().numpy()
         gt_traj = denormalize_data(full_dataset.Y2[i].to(device), Y_min_vals, Y_max_vals).cpu().numpy()
         
-        # 7. Identify Object Type (Round = Paired/True, Square = Unpaired/False)
-        is_paired = full_dataset.valid_inverses[i]
-        obj_key = 'round_peg_4' if is_paired else 'square_peg_4'
+        # 7. Identify Object Type dynamically via Context ID
+        curr_context_norm = full_dataset.C[i]
+        raw_id = denormalize_data(curr_context_norm, C_min_val, C_max_val)[0].item()
+        
+        obj_key = None
+        min_diff = float('inf')
+        for key, config in full_dataset.object_config.items():
+            diff = abs(config['id'] - raw_id)
+            if diff < min_diff:
+                min_diff = diff
+                obj_key = key
         
         predictions.append({
             'pred': pred_traj,
@@ -236,24 +244,26 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
     # Generate Bar Chart
     print("\nGenerating Bar Chart...")
     
-    # Data Preparation
-    labels = [full_dataset.object_config[o]['label'] for o in full_dataset.object_config] # ["Round Peg (Source)", "Square Peg (Target)"]
-    obj_keys = list(full_dataset.object_config.keys()) # ['round_peg_4', 'square_peg_4']
+    # Only plot objects that actually appeared in the test set evaluation
+    evaluated_obj_keys = list(obj_counts.keys())
+    labels = [full_dataset.object_config[k]['label'] for k in evaluated_obj_keys]
     
     x = np.arange(len(labels))  # label locations
     width = 0.35  # width of the bars
     
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(14, 6))
     
-    # Plot bars for each scenario
-    rects1 = ax.bar(x - width/2, [final_stats['5% (Strict)'][k] for k in obj_keys], width, label='5% Tolerance (Strict)', color='#d9534f')
-    rects2 = ax.bar(x + width/2, [final_stats['10% (Relaxed)'][k] for k in obj_keys], width, label='10% Tolerance (Relaxed)', color='#5bc0de')
+    # Plot bars using safe .get() in case a category was missing in one scenario
+    rects1 = ax.bar(x - width/2, [final_stats['5% (Strict)'].get(k, 0) for k in evaluated_obj_keys], width, label='5% Tolerance (Strict)', color='#d9534f')
+    rects2 = ax.bar(x + width/2, [final_stats['10% (Relaxed)'].get(k, 0) for k in evaluated_obj_keys], width, label='10% Tolerance (Relaxed)', color='#5bc0de')
     
     # Styling
     ax.set_ylabel('Success Rate (%)', fontsize=12, fontweight='bold')
-    ax.set_title('Task Extrapolation Success Rates\n(Round vs. Square Peg)', fontsize=14, fontweight='bold')
+    ax.set_title('Task Extrapolation Success Rates (Test Set)', fontsize=14, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, fontsize=11, fontweight='bold')
+    
+    # Rotate labels so they don't overlap
+    ax.set_xticklabels(labels, fontsize=10, fontweight='bold', rotation=45, ha='right')
     ax.set_ylim(0, 110)
     ax.legend(loc='upper right', fontsize=10)
     ax.grid(axis='y', linestyle='--', alpha=0.5)
@@ -334,9 +344,17 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
         if num_to_plot == 1: axes = np.expand_dims(axes, 0) 
 
         for row_idx, traj_idx in enumerate(indices):
-            # Identify Object Type
-            is_paired = full_dataset.valid_inverses[traj_idx]
-            curr_obj_name = full_dataset.object_config['round_peg_4']['label'] if is_paired else full_dataset.object_config['square_peg_4']['label']
+            # Identify Object Type dynamically via Context ID
+            curr_context_norm = full_dataset.C[traj_idx]
+            raw_id = denormalize_data(curr_context_norm, C_min_val, C_max_val)[0].item()
+            
+            curr_obj_name = "Unknown"
+            min_diff = float('inf')
+            for key, config in full_dataset.object_config.items():
+                diff = abs(config['id'] - raw_id)
+                if diff < min_diff:
+                    min_diff = diff
+                    curr_obj_name = config['label']
             
             # --- A. Prepare Ground Truth ---
             curr_y_truth_raw = Y2_raw[traj_idx].numpy() # Place Action (Inverse)
