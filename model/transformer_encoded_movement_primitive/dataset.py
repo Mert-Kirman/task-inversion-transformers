@@ -21,35 +21,35 @@ class ReassembleDataset(Dataset):
             # ==========================================
             
             # Category 1: Radially Symmetric 
-            'round_peg_1':  {'id': 0.00, 'paired': True,  'label': 'Round Peg 1'},
-            'round_peg_2':  {'id': 0.05, 'paired': True,  'label': 'Round Peg 2'},
-            'round_peg_3':  {'id': 0.10, 'paired': True,  'label': 'Round Peg 3'},
-            'round_peg_4':  {'id': 0.15, 'paired': True,  'label': 'Round Peg 4'},
+            'round_peg_1':  {'id': 0.0, 'paired': True,  'label': 'Round Peg 1'},
+            'round_peg_2':  {'id': 1.0, 'paired': True,  'label': 'Round Peg 2'},
+            'round_peg_3':  {'id': 2.0, 'paired': True,  'label': 'Round Peg 3'},
+            'round_peg_4':  {'id': 3.0, 'paired': True,  'label': 'Round Peg 4'},
             
             # Category 2: Meshing / Rotational
-            'small_gear':   {'id': 0.20, 'paired': True,  'label': 'Small Gear'},
-            'medium_gear':  {'id': 0.25, 'paired': True,  'label': 'Medium Gear'},
-            'large_gear':   {'id': 0.30, 'paired': True,  'label': 'Large Gear'},
+            'small_gear':   {'id': 4.0, 'paired': True,  'label': 'Small Gear'},
+            'medium_gear':  {'id': 5.0, 'paired': True,  'label': 'Medium Gear'},
+            'large_gear':   {'id': 6.0, 'paired': True,  'label': 'Large Gear'},
             
             # Category 3: Asymmetric Connectors & Fasteners
-            'bnc':          {'id': 0.35, 'paired': True,  'label': 'BNC Connector'},
-            'bolt_4':       {'id': 0.40, 'paired': True,  'label': 'Bolt 4 / Nut'},
-            'd-sub':        {'id': 0.45, 'paired': True,  'label': 'D-SUB Connector'},
-            'ethernet':     {'id': 0.50, 'paired': True,  'label': 'Ethernet Connector'},
-            'waterproof':   {'id': 0.55, 'paired': True,  'label': 'Waterproof Connector'},
+            'bnc':          {'id': 7.0, 'paired': True,  'label': 'BNC Connector'},
+            'bolt_4':       {'id': 8.0, 'paired': True,  'label': 'Bolt 4 / Nut'},
+            'd-sub':        {'id': 9.0, 'paired': True,  'label': 'D-SUB Connector'},
+            'ethernet':     {'id': 10.0, 'paired': True,  'label': 'Ethernet Connector'},
+            'waterproof':   {'id': 11.0, 'paired': True,  'label': 'Waterproof Connector'},
 
             # ==========================================
             # UNPAIRED CATEGORIES (Zero-Shot Targets)
             # ==========================================
             
             # Zero-Shot Test 1: Corners & Edges (Highly Geometric, No Rotational Symmetry)
-            'square_peg_1': {'id': 0.65, 'paired': False, 'label': 'Square Peg 1 (Unpaired)'},
-            'square_peg_2': {'id': 0.70, 'paired': False, 'label': 'Square Peg 2 (Unpaired)'},
-            'square_peg_3': {'id': 0.75, 'paired': False, 'label': 'Square Peg 3 (Unpaired)'},
-            'square_peg_4': {'id': 0.80, 'paired': False, 'label': 'Square Peg 4 (Unpaired)'},
+            'square_peg_1': {'id': 12.0, 'paired': False, 'label': 'Square Peg 1 (Unpaired)'},
+            'square_peg_2': {'id': 13.0, 'paired': False, 'label': 'Square Peg 2 (Unpaired)'},
+            'square_peg_3': {'id': 14.0, 'paired': False, 'label': 'Square Peg 3 (Unpaired)'},
+            'square_peg_4': {'id': 15.0, 'paired': False, 'label': 'Square Peg 4 (Unpaired)'},
             
             # Zero-Shot Test 2: Highly Asymmetric Alien Shape
-            'usb':          {'id': 0.90, 'paired': False, 'label': 'USB Connector (Unpaired)'}
+            'usb':          {'id': 16.0, 'paired': False, 'label': 'USB Connector (Unpaired)'}
         }
 
         # Lists to hold data from ALL objects
