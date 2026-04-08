@@ -6,19 +6,6 @@ import matplotlib.pyplot as plt
 
 # ================= CONFIGURATION =================
 BASE_DIR = 'data/processed_relative_high_level_actions'
-obj_names = ['round_peg_4', 'square_peg_4']
-# OBJ_NAME = 'round_peg_4'
-
-# Paths to separate directories
-insert_dirs = []
-place_dirs = []
-for OBJ_NAME in obj_names:
-     INSERT_DIR = os.path.join(BASE_DIR, 'insert', OBJ_NAME)
-     PLACE_DIR = os.path.join(BASE_DIR, 'place', OBJ_NAME)
-     insert_dirs.append(INSERT_DIR)
-     place_dirs.append(PLACE_DIR)
-# INSERT_DIR = os.path.join(BASE_DIR, 'insert', OBJ_NAME)
-# PLACE_DIR = os.path.join(BASE_DIR, 'place', OBJ_NAME)
 
 # Output Paths
 OUTPUT_DIR = 'data/paired_trajectories_insert_place'
@@ -63,8 +50,11 @@ def load_endpoints(directory):
     return filenames, np.array(start_points), np.array(end_points), full_data
 
 def match_trajectories():
-    for INSERT_DIR, PLACE_DIR in zip(insert_dirs, place_dirs):
-        print(f"\nProcessing Object: {os.path.basename(INSERT_DIR)}")
+    for obj_name in os.listdir(os.path.join(BASE_DIR, 'insert')):
+        INSERT_DIR = os.path.join(BASE_DIR, 'insert', obj_name)
+        PLACE_DIR = os.path.join(BASE_DIR, 'place', obj_name)
+
+        print(f"\nProcessing Object: {obj_name}")
         
         # 1. Load Data
         print("--- Loading Insert Data ---")
@@ -124,7 +114,7 @@ def match_trajectories():
             print(f"  {i+1}. {info['insert_name']} <--> {info['place_name']} (Dist: {info['match_distance']:.4f})")
 
         # 6. Save Stacked Data
-        base_save_dir = os.path.join(OUTPUT_DIR, os.path.basename(INSERT_DIR))
+        base_save_dir = os.path.join(OUTPUT_DIR, obj_name)
         os.makedirs(base_save_dir, exist_ok=True)
         save_path_ins = os.path.join(base_save_dir, 'insert_all.npy')
         save_path_place = os.path.join(base_save_dir, 'place_all.npy')
