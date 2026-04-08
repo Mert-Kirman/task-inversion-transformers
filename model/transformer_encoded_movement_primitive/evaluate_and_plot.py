@@ -151,13 +151,15 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
     Y_min_vals = Y_min_vals.to(device)
     Y_max_vals = Y_max_vals.to(device)
 
+    # Load the hidden test indices
+    test_idx = np.load(os.path.join(save_path, 'test_indices.npy'))
+
     # Prepare the target time steps (all 200 points)
     x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1)
-    
     predictions = []
     
-    print("Running Zero-Shot Inference (Conditioning on Full Forward Trajectory)...")
-    for i in range(len(full_dataset)):
+    print("Running Zero-Shot Inference (Conditioning on start and end points of inverse trajectories)...")
+    for i in test_idx:
         # 1. Grab the full Forward Trajectory
         y1_seq = full_dataset.Y1[i].unsqueeze(0).to(device)
         
@@ -277,7 +279,7 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
 def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
     print(f"\n--- EVALUATING RANDOM TRAJECTORIES ({num_samples} samples) ---")
 
-    # 1. Load Data & Stats
+    # Load Data & Stats
     full_dataset = ReassembleDataset(data_dir=base_data_folder)
     
     checkpoint = torch.load(os.path.join(save_path, "best_model.pth"))
@@ -299,9 +301,8 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
     d_y2 = full_dataset.d_y2 
     d_param = full_dataset.d_param
     time_len = full_dataset.time_len
-    num_demos = full_dataset.d_N
 
-    # 2. Load Model
+    # Load Model
     model = temp_model.TempModel(d_x, d_y1, d_y2, d_param).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
@@ -309,15 +310,18 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
     Y_min_vals = Y_min_vals.to(device)
     Y_max_vals = Y_max_vals.to(device)
 
-    # 3. Select Random Indices
-    num_to_plot = min(num_samples, num_demos)
-    indices = random.sample(range(num_demos), num_to_plot)
+    # Load test indices and sample from them
+    test_idx = np.load(os.path.join(save_path, 'test_indices.npy'))
+    test_idx_list = test_idx.tolist()
+    
+    num_to_plot = min(num_samples, len(test_idx_list))
+    indices = random.sample(test_idx_list, num_to_plot)
     
     # Target time steps (Full Sequence)
     time_steps = np.linspace(0, 1, time_len)
     x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1)
 
-    print(f"Evaluating indices: {indices}")
+    print(f"Plotting trajectories for test indices: {indices}")
 
     # Define the evaluation modes (p=1 forces L_F, p=2 forces L_I)
     modes = [

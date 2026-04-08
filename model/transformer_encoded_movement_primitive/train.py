@@ -160,7 +160,7 @@ def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_rec
         grad_norm_list.append(avg_grad_norm)
         
         # --- Validation ---
-        if (epoch + 1) % 50 == 0:
+        if (epoch + 1) % 20 == 0:
             model.eval()
             epoch_train_fwd_mse = 0.0
             epoch_train_inv_mse = 0.0
@@ -257,19 +257,38 @@ if __name__ == "__main__":
     base_data_folder = "data/paired_trajectories_insert_place"
     full_dataset = ReassembleDataset(data_dir=base_data_folder)
 
-    # --- Split Train/Val ---
+    # --- Split Train/Val/Test ---
     # stratify=labels guarantees the exact same ratio of paired/unpaired in train and val
     labels = full_dataset.valid_inverses
-    train_idx, val_idx = train_test_split(
+    train_val_idx, test_idx = train_test_split(
         range(len(labels)), 
-        test_size=0.2, 
-        stratify=labels
+        test_size=0.15, 
+        stratify=labels,
+        random_state=seed
     )
 
-    # --- Calculate normalization stats only on the training subset (avoid data leakage) ---
+    # Extract the labels for the remaining 85% so we can stratify again
+    train_val_labels = [labels[i] for i in train_val_idx]
+
+    # Split the remainder into Train (70% of total) and Val (15% of total) (0.15 / 0.85 = 0.1764)
+    train_idx, val_idx = train_test_split(
+        train_val_idx, 
+        test_size=0.1764, 
+        stratify=train_val_labels,
+        random_state=seed
+    )
+
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_folder = f"model/transformer_encoded_movement_primitive/save/run_{run_id}"
+    os.makedirs(save_folder, exist_ok=True)
+
+    # Save the test indices so evaluation script knows exactly which data was held out
+    np.save(os.path.join(save_folder, 'test_indices.npy'), np.array(test_idx))
+
+    # Calculate normalization stats only on the training subset (avoid data leakage)
     full_dataset.Y1, full_dataset.Y2, full_dataset.C, Y_min_vals, Y_max_vals, C_min_val, C_max_val = normalize_data(full_dataset.Y1, full_dataset.Y2, full_dataset.C, train_idx)
 
-    # --- Filter indices for the Paired task (Round pegs only) ---
+    # Filter indices for the Paired task
     paired_train_idx = [i for i in train_idx if full_dataset.valid_inverses[i]]
     
     # Create two Subsets
@@ -277,19 +296,16 @@ if __name__ == "__main__":
     train_reconstruction_dataset = Subset(full_dataset, train_idx) # Uses ALL data
     val_dataset = Subset(full_dataset, val_idx)
     
-    # Create two DataLoaders
-    train_inversion_loader = DataLoader(train_inversion_dataset, batch_size=16, shuffle=True)
-    train_reconstruction_loader = DataLoader(train_reconstruction_dataset, batch_size=16, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
+    # Create DataLoaders
+    BATCH_SIZE = 32
 
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_folder = f"model/transformer_encoded_movement_primitive/save/run_{run_id}"
-    os.makedirs(save_folder, exist_ok=True)
+    train_inversion_loader = DataLoader(train_inversion_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    train_reconstruction_loader = DataLoader(train_reconstruction_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
     # -- MODEL, OPTIMIZER, SCHEDULER CONFIGURATION ---
-    EPOCHS = 3001
-    BATCH_SIZE = 16
-    learning_rate = 4.5e-4
+    EPOCHS = 1001
+    learning_rate = 1e-3
     weight_decay = 3.5e-5
     dropout_p = [0.1, 0.0]
     gradient_clip_norm = 3.0
@@ -320,6 +336,7 @@ if __name__ == "__main__":
         'num_demonstrations': full_dataset.d_N,
         'num_training_samples': len(train_idx),
         'num_validation_samples': len(val_idx),
+        'num_test_samples': len(test_idx),
         'Y1_shape': full_dataset.Y1.shape,
         'Y2_shape': full_dataset.Y2.shape,
         'C_shape': full_dataset.C.shape,
