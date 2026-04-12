@@ -3,6 +3,8 @@ import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
 import random
 
 # Adjust path to find model modules
@@ -385,7 +387,7 @@ def calculate_success_rates_and_plot(device='cpu'):
 
 def calculate_continuous_errors_and_plot(device='cpu'):
     print("\n--- CALCULATING CONTINUOUS ERRORS (CM) & PLOTTING ---")
-    
+
     # Load Data & Stats
     y_min, y_max, c_min, c_max = load_normalization_stats()
     y_min = y_min.to(device)
@@ -419,18 +421,18 @@ def calculate_continuous_errors_and_plot(device='cpu'):
     if c_min is not None and c_max is not None:
         C_normalized = normalize_data(C_raw, c_min, c_max)
 
-    # Run Inference ONCE for all data
-    t_steps = np.linspace(0, 1, time_len)
-    cond_idx = [0, -1] # Condition on Start and End for evaluation
-    
-    # Load Test Indices
+    # Setup Data Structures
+    metrics = ['Euclidean (3D)', 'X-Axis (Left/Right)', 'Y-Axis (Forward/Back)', 'Z-Axis (Depth)']
+    start_errors = {m: {} for m in metrics}
+    end_errors = {m: {} for m in metrics}
+
     test_idx = np.load(os.path.join(save_path, 'test_indices.npy'))
     print(f"Evaluating continuous errors on {len(test_idx)} test samples...")
     
-    # Dictionaries to store errors per object
-    start_errors_cm = {}
-    end_errors_cm = {}
+    t_steps = np.linspace(0, 1, time_len)
+    cond_idx = [0, -1]
 
+    # Run Inference Loop
     for i in test_idx:
         # Prepare Condition
         cond_pts = []
@@ -451,59 +453,82 @@ def calculate_continuous_errors_and_plot(device='cpu'):
         gt_traj = Y2_raw[i].cpu().numpy()
         obj = obj_names[i]
         
-        if obj not in start_errors_cm:
-            start_errors_cm[obj] = []
-            end_errors_cm[obj] = []
+        if obj not in start_errors['Euclidean (3D)']:
+            for m in metrics:
+                start_errors[m][obj] = []
+                end_errors[m][obj] = []
+                
+        # Calculate Differences in cm
+        diff_start = (pred_traj[0, :3] - gt_traj[0, :3]) * 100.0
+        diff_end = (pred_traj[-1, :3] - gt_traj[-1, :3]) * 100.0
+        
+        start_errors['Euclidean (3D)'][obj].append(np.linalg.norm(diff_start))
+        start_errors['X-Axis (Left/Right)'][obj].append(abs(diff_start[0]))
+        start_errors['Y-Axis (Forward/Back)'][obj].append(abs(diff_start[1]))
+        start_errors['Z-Axis (Depth)'][obj].append(abs(diff_start[2]))
+        
+        end_errors['Euclidean (3D)'][obj].append(np.linalg.norm(diff_end))
+        end_errors['X-Axis (Left/Right)'][obj].append(abs(diff_end[0]))
+        end_errors['Y-Axis (Forward/Back)'][obj].append(abs(diff_end[1]))
+        end_errors['Z-Axis (Depth)'][obj].append(abs(diff_end[2]))
+
+    # Helper function to plot a set of 4 Violins using Seaborn
+    def create_violin_figure(error_data, time_title, filename):
+        evaluated_obj_keys = list(error_data['Euclidean (3D)'].keys())
+        
+        # Map object keys to their label with the (n=X) count included
+        label_map = {k: f"{object_config[k]['label']} (n={len(error_data['Euclidean (3D)'][k])})" for k in evaluated_obj_keys}
+        
+        # Convert the dictionary into a Pandas DataFrame for Seaborn
+        rows = []
+        for m in metrics:
+            for k in evaluated_obj_keys:
+                obj_label = label_map[k]
+                for val in error_data[m][k]:
+                    rows.append({'Metric': m, 'Object': obj_label, 'Error (cm)': val})
+        df = pd.DataFrame(rows)
+        
+        fig, axes = plt.subplots(4, 1, figsize=(14, 18))
+        fig.suptitle(f'Trajectory {time_title} Deviation', fontsize=18, fontweight='bold', y=0.98)
+
+        for idx, m in enumerate(metrics):
+            ax = axes[idx]
+            df_metric = df[df['Metric'] == m]
             
-        # Calculate 3D Euclidean Distance (m -> cm)
-        # Using the first 3 dimensions (X, Y, Z)
-        pred_start = pred_traj[0, :3]
-        gt_start = gt_traj[0, :3]
-        dist_start = np.linalg.norm(pred_start - gt_start) * 100.0  # Convert to cm
-        
-        pred_end = pred_traj[-1, :3]
-        gt_end = gt_traj[-1, :3]
-        dist_end = np.linalg.norm(pred_end - gt_end) * 100.0    # Convert to cm
-        
-        start_errors_cm[obj].append(dist_start)
-        end_errors_cm[obj].append(dist_end)
+            # Seaborn Violin Plot
+            sns.violinplot(
+                data=df_metric, 
+                x='Object', 
+                y='Error (cm)', 
+                ax=ax,
+                color='#5bc0de',
+                linewidth=1.5,
+                inner='box',
+                cut=0,   # Prevent the violin from drawing density below 0 cm
+                density_norm='width'
+            )
+            
+            ax.set_title(m, fontsize=14, fontweight='bold')
+            ax.set_ylabel('Error (cm)', fontsize=12, fontweight='bold')
+            ax.set_xlabel('') # Clear redundant x-axis label
+            
+            # Only show object names on the very bottom plot
+            if idx == 3:
+                ax.set_xticklabels(ax.get_xticklabels(), fontsize=10, fontweight='bold', rotation=45, ha='right')
+            else:
+                ax.set_xticklabels([])
+                
+            ax.grid(axis='y', linestyle='--', alpha=0.5)
 
-    # Generate Box-and-Whisker Plots
-    print("\nGenerating Box-and-Whisker Plots...")
-    
-    evaluated_obj_keys = list(start_errors_cm.keys())
-    # Format labels with (n=X)
-    labels = [f"{object_config[k]['label']} (n={len(start_errors_cm[k])})" for k in evaluated_obj_keys]
-    
-    # Extract lists of data in the correct order
-    start_data = [start_errors_cm[k] for k in evaluated_obj_keys]
-    end_data = [end_errors_cm[k] for k in evaluated_obj_keys]
+        plt.tight_layout(rect=[0, 0, 1, 0.97]) 
+        plot_path = os.path.join(save_path, filename)
+        plt.savefig(plot_path, dpi=300)
+        print(f"Saved: {plot_path}")
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12))
-
-    # Box properties for clean styling
-    boxprops = dict(linestyle='-', linewidth=2, color='darkblue')
-    medianprops = dict(linestyle='-', linewidth=2, color='firebrick')
-    whiskerprops = dict(linestyle='--', linewidth=1.5, color='black')
-
-    # Plot 1: Start Point Errors
-    ax1.boxplot(start_data, labels=labels, boxprops=boxprops, medianprops=medianprops, whiskerprops=whiskerprops, patch_artist=True)
-    ax1.set_title('Trajectory Start Point Deviation (t=0)', fontsize=14, fontweight='bold')
-    ax1.set_ylabel('Euclidean Error (cm)', fontsize=12, fontweight='bold')
-    ax1.set_xticklabels(labels, fontsize=10, fontweight='bold', rotation=45, ha='right')
-    ax1.grid(axis='y', linestyle='--', alpha=0.5)
-
-    # Plot 2: End Point Errors
-    ax2.boxplot(end_data, labels=labels, boxprops=boxprops, medianprops=medianprops, whiskerprops=whiskerprops, patch_artist=True)
-    ax2.set_title('Trajectory End Point Deviation (t=1)', fontsize=14, fontweight='bold')
-    ax2.set_ylabel('Euclidean Error (cm)', fontsize=12, fontweight='bold')
-    ax2.set_xticklabels(labels, fontsize=10, fontweight='bold', rotation=45, ha='right')
-    ax2.grid(axis='y', linestyle='--', alpha=0.5)
-
-    plt.tight_layout()
-    plot_path = os.path.join(save_path, 'continuous_error_boxplots.png')
-    plt.savefig(plot_path, dpi=300)
-    print(f"Continuous error boxplots saved to {plot_path}")
+    # Generate the two separate figure files
+    print("\nGenerating Seaborn Violin Plots...")
+    create_violin_figure(start_errors, "Start Point (t=0)", 'continuous_error_violins_start.png')
+    create_violin_figure(end_errors, "End Point (t=1)", 'continuous_error_violins_end.png')
 
 def evaluate_random_trajectories(num_samples=6, device='cpu'):
     # 1. Load Norm Stats
@@ -719,7 +744,7 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name(0)}")
     
-    plot_training_progress()
-    calculate_success_rates_and_plot(device=device)
+    # plot_training_progress()
+    # calculate_success_rates_and_plot(device=device)
     calculate_continuous_errors_and_plot(device=device)
-    evaluate_random_trajectories(num_samples=100, device=device)
+    # evaluate_random_trajectories(num_samples=100, device=device)
