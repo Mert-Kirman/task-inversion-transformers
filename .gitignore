@@ -11,5 +11,6 @@ data/paired_trajectories/
 data/paired_trajectories_insert_place/
 data/warped_trajectories/
 data/plots_warped_full/
+data/reassemble_extra_info/
 wandb/
 *.csv

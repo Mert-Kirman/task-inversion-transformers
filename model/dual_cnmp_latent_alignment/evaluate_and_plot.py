@@ -383,6 +383,128 @@ def calculate_success_rates_and_plot(device='cpu'):
     plt.savefig(plot_path, dpi=300)
     print(f"Bar chart saved to {plot_path}")
 
+def calculate_continuous_errors_and_plot(device='cpu'):
+    print("\n--- CALCULATING CONTINUOUS ERRORS (CM) & PLOTTING ---")
+    
+    # Load Data & Stats
+    y_min, y_max, c_min, c_max = load_normalization_stats()
+    y_min = y_min.to(device)
+    y_max = y_max.to(device)
+    if c_min is not None: c_min = c_min.to(device)
+    if c_max is not None: c_max = c_max.to(device)
+    
+    Y1_raw, Y2_raw, C_raw, obj_names = load_matched_data()
+    
+    d_x = 1
+    d_y1 = Y1_raw.shape[2] 
+    d_y2 = Y2_raw.shape[2] 
+    d_param = C_raw.shape[1] 
+    time_len = Y1_raw.shape[1] 
+    
+    Y1_raw = Y1_raw.to(device)
+    Y2_raw = Y2_raw.to(device)
+    C_raw = C_raw.to(device)
+    
+    # Load Model
+    model = dual_cnmp_model.DualCNMP(d_x, d_y1, d_y2, d_param).to(device)
+    model_path = os.path.join(save_path, model_name)
+    if not os.path.exists(model_path):
+        print(f"Model not found at {model_path}")
+        return
+    
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.eval()
+    
+    C_normalized = C_raw.clone()
+    if c_min is not None and c_max is not None:
+        C_normalized = normalize_data(C_raw, c_min, c_max)
+
+    # Run Inference ONCE for all data
+    t_steps = np.linspace(0, 1, time_len)
+    cond_idx = [0, -1] # Condition on Start and End for evaluation
+    
+    # Load Test Indices
+    test_idx = np.load(os.path.join(save_path, 'test_indices.npy'))
+    print(f"Evaluating continuous errors on {len(test_idx)} test samples...")
+    
+    # Dictionaries to store errors per object
+    start_errors_cm = {}
+    end_errors_cm = {}
+
+    for i in test_idx:
+        # Prepare Condition
+        cond_pts = []
+        for idx in cond_idx:
+            y_cond_raw = Y2_raw[i, idx]
+            y_cond_raw = y_cond_raw.unsqueeze(0) # Shape (1, d_y2)
+            y_cond_norm = normalize_data(y_cond_raw, y_min, y_max)
+            cond_pts.append([t_steps[idx], y_cond_norm])
+
+        curr_context = C_normalized[i]
+        
+        with torch.no_grad():
+            means_norm, _ = model_predict.predict_inverse_inverse(
+                model, time_len, curr_context, cond_pts, d_x, d_y1, d_y2, device=device
+            )
+        
+        pred_traj = denormalize_data(means_norm, y_min, y_max).cpu().numpy()
+        gt_traj = Y2_raw[i].cpu().numpy()
+        obj = obj_names[i]
+        
+        if obj not in start_errors_cm:
+            start_errors_cm[obj] = []
+            end_errors_cm[obj] = []
+            
+        # Calculate 3D Euclidean Distance (m -> cm)
+        # Using the first 3 dimensions (X, Y, Z)
+        pred_start = pred_traj[0, :3]
+        gt_start = gt_traj[0, :3]
+        dist_start = np.linalg.norm(pred_start - gt_start) * 100.0  # Convert to cm
+        
+        pred_end = pred_traj[-1, :3]
+        gt_end = gt_traj[-1, :3]
+        dist_end = np.linalg.norm(pred_end - gt_end) * 100.0    # Convert to cm
+        
+        start_errors_cm[obj].append(dist_start)
+        end_errors_cm[obj].append(dist_end)
+
+    # Generate Box-and-Whisker Plots
+    print("\nGenerating Box-and-Whisker Plots...")
+    
+    evaluated_obj_keys = list(start_errors_cm.keys())
+    # Format labels with (n=X)
+    labels = [f"{object_config[k]['label']} (n={len(start_errors_cm[k])})" for k in evaluated_obj_keys]
+    
+    # Extract lists of data in the correct order
+    start_data = [start_errors_cm[k] for k in evaluated_obj_keys]
+    end_data = [end_errors_cm[k] for k in evaluated_obj_keys]
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12))
+
+    # Box properties for clean styling
+    boxprops = dict(linestyle='-', linewidth=2, color='darkblue')
+    medianprops = dict(linestyle='-', linewidth=2, color='firebrick')
+    whiskerprops = dict(linestyle='--', linewidth=1.5, color='black')
+
+    # Plot 1: Start Point Errors
+    ax1.boxplot(start_data, labels=labels, boxprops=boxprops, medianprops=medianprops, whiskerprops=whiskerprops, patch_artist=True)
+    ax1.set_title('Trajectory Start Point Deviation (t=0)', fontsize=14, fontweight='bold')
+    ax1.set_ylabel('Euclidean Error (cm)', fontsize=12, fontweight='bold')
+    ax1.set_xticklabels(labels, fontsize=10, fontweight='bold', rotation=45, ha='right')
+    ax1.grid(axis='y', linestyle='--', alpha=0.5)
+
+    # Plot 2: End Point Errors
+    ax2.boxplot(end_data, labels=labels, boxprops=boxprops, medianprops=medianprops, whiskerprops=whiskerprops, patch_artist=True)
+    ax2.set_title('Trajectory End Point Deviation (t=1)', fontsize=14, fontweight='bold')
+    ax2.set_ylabel('Euclidean Error (cm)', fontsize=12, fontweight='bold')
+    ax2.set_xticklabels(labels, fontsize=10, fontweight='bold', rotation=45, ha='right')
+    ax2.grid(axis='y', linestyle='--', alpha=0.5)
+
+    plt.tight_layout()
+    plot_path = os.path.join(save_path, 'continuous_error_boxplots.png')
+    plt.savefig(plot_path, dpi=300)
+    print(f"Continuous error boxplots saved to {plot_path}")
+
 def evaluate_random_trajectories(num_samples=6, device='cpu'):
     # 1. Load Norm Stats
     y_min, y_max, c_min, c_max = load_normalization_stats()
@@ -599,4 +721,5 @@ if __name__ == "__main__":
     
     plot_training_progress()
     calculate_success_rates_and_plot(device=device)
+    calculate_continuous_errors_and_plot(device=device)
     evaluate_random_trajectories(num_samples=100, device=device)
