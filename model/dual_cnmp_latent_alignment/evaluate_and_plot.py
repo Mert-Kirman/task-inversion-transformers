@@ -525,10 +525,43 @@ def calculate_continuous_errors_and_plot(device='cpu'):
         plt.savefig(plot_path, dpi=300)
         print(f"Saved: {plot_path}")
 
+    # Helper function to calculate and save numerical statistics
+    def save_numerical_statistics(error_data, time_title, filename):
+        print(f"\n=== Numerical Statistics: {time_title} ===")
+        stats_file_path = os.path.join(save_path, filename)
+        
+        with open(stats_file_path, 'w') as f:
+            for m in metrics:
+                header = f"\n--- {m} ---"
+                print(header)
+                f.write(header + "\n")
+                
+                evaluated_obj_keys = list(error_data[m].keys())
+                for k in evaluated_obj_keys:
+                    err_list = error_data[m][k]
+                    if len(err_list) == 0:
+                        continue
+                        
+                    mean_val = np.mean(err_list)
+                    std_val = np.std(err_list)
+                    
+                    # Use the raw object name from object_config, plus (n=X)
+                    obj_label = f"{object_config[k]['label']} (n={len(err_list)})"
+                    line = f"{obj_label:<35} | Mean: {mean_val:>5.2f} cm | Std: {std_val:>5.2f} cm"
+                    
+                    print(line)
+                    f.write(line + "\n")
+                    
+        print(f"\nStatistics saved to {stats_file_path}")
+
     # Generate the two separate figure files
     print("\nGenerating Seaborn Violin Plots...")
     create_violin_figure(start_errors, "Start Point (t=0)", 'continuous_error_violins_start.png')
     create_violin_figure(end_errors, "End Point (t=1)", 'continuous_error_violins_end.png')
+
+    # Generate and save the numerical statistics
+    save_numerical_statistics(start_errors, "Start Point (t=0)", 'continuous_errors_stats_start.txt')
+    save_numerical_statistics(end_errors, "End Point (t=1)", 'continuous_errors_stats_end.txt')
 
 def evaluate_random_trajectories(num_samples=6, device='cpu'):
     # 1. Load Norm Stats
@@ -744,7 +777,7 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name(0)}")
     
-    # plot_training_progress()
-    # calculate_success_rates_and_plot(device=device)
+    plot_training_progress()
+    calculate_success_rates_and_plot(device=device)
     calculate_continuous_errors_and_plot(device=device)
-    # evaluate_random_trajectories(num_samples=100, device=device)
+    evaluate_random_trajectories(num_samples=100, device=device)
