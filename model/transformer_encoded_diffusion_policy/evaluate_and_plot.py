@@ -13,13 +13,13 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from dataset import ReassembleDataset
-import model.transformer_encoded_movement_primitive.temp_model as temp_model
+import model.transformer_encoded_diffusion_policy.tedp_model as tedp_model
 import model.model_predict as model_predict
 import model.utils as utils
 
 # ================= CONFIGURATION =================
 run_id = "run_20260408_204033"
-save_path = f"model/transformer_encoded_movement_primitive/save/{run_id}"
+save_path = f"model/transformer_encoded_diffusion_policy/save/{run_id}"
 # =================================================
 
 def normalize_data(Y1, Y2, C, Y_min_vals, Y_max_vals, C_min_val, C_max_val):
@@ -145,7 +145,7 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
     time_len = full_dataset.time_len
 
     # Load Model
-    model = temp_model.TempModel(d_x, d_y1, d_y2, d_param).to(device)
+    model = tedp_model.TedpModel(d_x, d_y1, d_y2, d_param).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
@@ -313,7 +313,7 @@ def calculate_continuous_errors_and_plot(base_data_folder, device='cpu'):
     time_len = full_dataset.time_len
     
     # Load Model
-    model = temp_model.TempModel(d_x, d_y1, d_y2, d_param).to(device)
+    model = tedp_model.TedpModel(d_x, d_y1, d_y2, d_param).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
@@ -507,7 +507,7 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
     time_len = full_dataset.time_len
 
     # Load Model
-    model = temp_model.TempModel(d_x, d_y1, d_y2, d_param).to(device)
+    model = tedp_model.TedpModel(d_x, d_y1, d_y2, d_param).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
