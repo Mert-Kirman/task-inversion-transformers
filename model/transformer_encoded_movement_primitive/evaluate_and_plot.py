@@ -2,7 +2,9 @@ import sys
 import os
 import torch
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
 import random
 
 # Adjust path to find model modules
@@ -289,6 +291,195 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
     plt.savefig(plot_path, dpi=300)
     print(f"Bar chart saved to {plot_path}")
 
+def calculate_continuous_errors_and_plot(base_data_folder, device='cpu'):
+    print("\n--- CALCULATING CONTINUOUS ERRORS (CM) & PLOTTING ---")
+
+    # Load Data
+    full_dataset = ReassembleDataset(data_dir=base_data_folder)
+
+    # Load Normalization Stats
+    checkpoint = torch.load(os.path.join(save_path, "best_model.pth"))
+    norm_stats = checkpoint['norm_stats']
+    Y_min_vals, Y_max_vals, C_min_val, C_max_val = norm_stats['Y_min'], norm_stats['Y_max'], norm_stats['C_min'], norm_stats['C_max']
+
+    # Normalize data
+    full_dataset.Y1, full_dataset.Y2, full_dataset.C = normalize_data(full_dataset.Y1, full_dataset.Y2, full_dataset.C, Y_min_vals, Y_max_vals, C_min_val, C_max_val)
+    
+    # Data dimensions
+    d_x = full_dataset.d_x
+    d_y1 = full_dataset.d_y1
+    d_y2 = full_dataset.d_y2
+    d_param = full_dataset.d_param
+    time_len = full_dataset.time_len
+    
+    # Load Model
+    model = temp_model.TempModel(d_x, d_y1, d_y2, d_param).to(device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
+
+    Y_min_vals = Y_min_vals.to(device)
+    Y_max_vals = Y_max_vals.to(device)
+
+    # Setup Data Structures
+    metrics = ['Euclidean (3D)', 'X-Axis (Left/Right)', 'Y-Axis (Forward/Back)', 'Z-Axis (Depth)']
+    start_errors = {m: {} for m in metrics}
+    end_errors = {m: {} for m in metrics}
+
+    # Load the hidden test indices
+    test_idx = np.load(os.path.join(save_path, 'test_indices.npy'))
+    print(f"Evaluating continuous errors on {len(test_idx)} test samples...")
+    
+    x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1)
+
+    # Run Inference Loop
+    for i in test_idx:
+        # Grab the full Forward Trajectory
+        y1_seq = full_dataset.Y1[i].unsqueeze(0).to(device)
+        
+        # Grab the Inverse Trajectory
+        y2_seq = full_dataset.Y2[i].unsqueeze(0).to(device)
+        
+        # Context
+        curr_context = full_dataset.C[i].view(1, 1, -1).to(device)
+
+        # Condition points
+        condition_points = [0, -1] # t=0 and t=1 of the inverse trajectory corresponds to indices 0 and 199 (since time_len=200)
+        eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
+        eval_mask[0, condition_points] = False # Set condition points to False (Observed)
+        
+        # Run Inference (p=2 forces Decoder to use L_I to generate Forward and Inverse trajectories)
+        with torch.no_grad():
+            output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=2, mask_indices_2=eval_mask)
+            
+        # Extract the Predicted Inverse Trajectory
+        _, _, pred_mean_i, _ = output.chunk(4, dim=-1)
+        
+        # Denormalize Predictions and Ground Truth to physical scale
+        pred_traj = denormalize_data(pred_mean_i.squeeze(0), Y_min_vals, Y_max_vals).cpu().numpy()
+        gt_traj = denormalize_data(full_dataset.Y2[i].to(device), Y_min_vals, Y_max_vals).cpu().numpy()
+        
+        # Identify Object Type dynamically via Context ID
+        curr_context_norm = full_dataset.C[i]
+        raw_id = denormalize_data(curr_context_norm, C_min_val, C_max_val)[-1].item()
+        
+        obj_key = None
+        min_diff = float('inf')
+        for key, config in full_dataset.object_config.items():
+            diff = abs(config['id'] - raw_id)
+            if diff < min_diff:
+                min_diff = diff
+                obj_key = key
+        
+        if obj_key not in start_errors['Euclidean (3D)']:
+            for m in metrics:
+                start_errors[m][obj_key] = []
+                end_errors[m][obj_key] = []
+                
+        # Calculate Differences in cm
+        diff_start = (pred_traj[0, :3] - gt_traj[0, :3]) * 100.0
+        diff_end = (pred_traj[-1, :3] - gt_traj[-1, :3]) * 100.0
+        
+        start_errors['Euclidean (3D)'][obj_key].append(np.linalg.norm(diff_start))
+        start_errors['X-Axis (Left/Right)'][obj_key].append(abs(diff_start[0]))
+        start_errors['Y-Axis (Forward/Back)'][obj_key].append(abs(diff_start[1]))
+        start_errors['Z-Axis (Depth)'][obj_key].append(abs(diff_start[2]))
+        
+        end_errors['Euclidean (3D)'][obj_key].append(np.linalg.norm(diff_end))
+        end_errors['X-Axis (Left/Right)'][obj_key].append(abs(diff_end[0]))
+        end_errors['Y-Axis (Forward/Back)'][obj_key].append(abs(diff_end[1]))
+        end_errors['Z-Axis (Depth)'][obj_key].append(abs(diff_end[2]))
+
+    # Helper function to plot a set of 4 Violins using Seaborn
+    def create_violin_figure(error_data, time_title, filename):
+        evaluated_obj_keys = list(error_data['Euclidean (3D)'].keys())
+        
+        # Map object keys to their label with the (n=X) count included
+        label_map = {k: f"{full_dataset.object_config[k]['label']} (n={len(error_data['Euclidean (3D)'][k])})" for k in evaluated_obj_keys}
+        
+        # Convert the dictionary into a Pandas DataFrame for Seaborn
+        rows = []
+        for m in metrics:
+            for k in evaluated_obj_keys:
+                obj_label = label_map[k]
+                for val in error_data[m][k]:
+                    rows.append({'Metric': m, 'Object': obj_label, 'Error (cm)': val})
+        df = pd.DataFrame(rows)
+        
+        fig, axes = plt.subplots(4, 1, figsize=(14, 18))
+        fig.suptitle(f'Trajectory {time_title} Deviation', fontsize=18, fontweight='bold', y=0.98)
+
+        for idx, m in enumerate(metrics):
+            ax = axes[idx]
+            df_metric = df[df['Metric'] == m]
+            
+            # Seaborn Violin Plot
+            sns.violinplot(
+                data=df_metric, 
+                x='Object', 
+                y='Error (cm)', 
+                ax=ax,
+                color='#5bc0de',
+                linewidth=1.5,
+                inner='box',
+                cut=0,   # Prevent the violin from drawing density below 0 cm
+                density_norm='width'
+            )
+            
+            ax.set_title(m, fontsize=14, fontweight='bold')
+            ax.set_ylabel('Error (cm)', fontsize=12, fontweight='bold')
+            ax.set_xlabel('') # Clear redundant x-axis label
+            
+            # Only show object names on the very bottom plot
+            if idx == 3:
+                ax.set_xticklabels(ax.get_xticklabels(), fontsize=10, fontweight='bold', rotation=45, ha='right')
+            else:
+                ax.set_xticklabels([])
+                
+            ax.grid(axis='y', linestyle='--', alpha=0.5)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.97]) 
+        plot_path = os.path.join(save_path, filename)
+        plt.savefig(plot_path, dpi=300)
+        print(f"Saved: {plot_path}")
+
+    # Helper function to calculate and save numerical statistics
+    def save_numerical_statistics(error_data, time_title, filename):
+        print(f"\n=== Numerical Statistics: {time_title} ===")
+        stats_file_path = os.path.join(save_path, filename)
+        
+        with open(stats_file_path, 'w') as f:
+            for m in metrics:
+                header = f"\n--- {m} ---"
+                print(header)
+                f.write(header + "\n")
+                
+                evaluated_obj_keys = list(error_data[m].keys())
+                for k in evaluated_obj_keys:
+                    err_list = error_data[m][k]
+                    if len(err_list) == 0:
+                        continue
+                        
+                    mean_val = np.mean(err_list)
+                    std_val = np.std(err_list)
+                    
+                    # Use the raw object name from object_config, plus (n=X)
+                    obj_label = f"{full_dataset.object_config[k]['label']} (n={len(err_list)})"
+                    line = f"{obj_label:<35} | Mean: {mean_val:>5.2f} cm | Std: {std_val:>5.2f} cm"
+                    
+                    print(line)
+                    f.write(line + "\n")
+                    
+        print(f"\nStatistics saved to {stats_file_path}")
+
+    # Generate the two separate figure files
+    print("\nGenerating Seaborn Violin Plots...")
+    create_violin_figure(start_errors, "Start Point (t=0)", 'continuous_error_violins_start.png')
+    create_violin_figure(end_errors, "End Point (t=1)", 'continuous_error_violins_end.png')
+
+    # Generate and save the numerical statistics
+    save_numerical_statistics(start_errors, "Start Point (t=0)", 'continuous_errors_stats_start.txt')
+    save_numerical_statistics(end_errors, "End Point (t=1)", 'continuous_errors_stats_end.txt')
+
 def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
     print(f"\n--- EVALUATING RANDOM TRAJECTORIES ({num_samples} samples) ---")
 
@@ -458,7 +649,8 @@ if __name__ == "__main__":
 
     base_data_folder = "data/paired_trajectories_insert_place"
     
-    plot_grad_norms()
-    plot_training_progress()
-    calculate_success_rates_and_plot(base_data_folder, device=device)
-    evaluate_random_trajectories(base_data_folder, num_samples=100, device=device)
+    # plot_grad_norms()
+    # plot_training_progress()
+    # calculate_success_rates_and_plot(base_data_folder, device=device)
+    calculate_continuous_errors_and_plot(base_data_folder, device=device)
+    # evaluate_random_trajectories(base_data_folder, num_samples=100, device=device)
