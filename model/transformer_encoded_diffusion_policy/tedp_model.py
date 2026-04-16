@@ -1,75 +1,17 @@
+import sys
+import os
+
+# Add project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 import torch
 import torch.nn as nn
-import math
-import model.loss_utils as loss_utils
+import torch.nn.functional as F
 
-class PositionalEncoding(nn.Module):
-    """
-    Injects information about the relative or absolute position of the 
-    tokens in the sequence. Crucial for Transformers since they don't 
-    have an inherent sense of time/order.
-    """
-    def __init__(self, d_model, max_len=1000):
-        super().__init__()
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(1, max_len, d_model)
-        pe[0, :, 0::2] = torch.sin(position * div_term)
-        pe[0, :, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        # x shape: (batch_size, time_len, d_model)
-        x = x + self.pe[:, :x.size(1), :]
-        return x
-
-
-class TransformerTrajectoryEncoder(nn.Module):
-    def __init__(self, input_dim, d_model=256, nhead=8, num_layers=4, dropout=0.1):
-        super().__init__()
-        # 1. Project physical dimensions (e.g., 3) up to the Transformer's hidden dimension
-        self.input_proj = nn.Linear(input_dim, d_model)
-
-        # The Continuous [MASK] Token: Tells the network "this coordinate is missing" during training, encouraging it to learn robust representations
-        self.mask_token = nn.Parameter(torch.randn(1, 1, d_model))
-        
-        # 2. Add time awareness
-        self.pos_encoder = PositionalEncoding(d_model)
-        
-        # 3. The BERT Stack
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, 
-            nhead=nhead, 
-            dim_feedforward=d_model * 4, 
-            dropout=dropout,
-            batch_first=True # Expects (batch, seq, feature) instead of (seq, batch, feature)
-        )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-
-    def forward(self, seq, mask_indices=None):
-        # seq shape: (batch_size, time_len, input_dim)
-        # mask_indices shape: (batch_size, time_len) containing booleans (True = Mask this point)
-
-        # Project to d_model
-        x = self.input_proj(seq) # (batch_size, time_len, d_model)
-        
-        # Apply the [MASK] token
-        if mask_indices is not None:
-            # Expand boolean mask to match feature dimension
-            expanded_mask = mask_indices.unsqueeze(-1).expand(-1, -1, x.size(-1))
-            # Replace True indices with the learnable mask token
-            x = torch.where(expanded_mask, self.mask_token, x)
-
-        # Add time awareness to the known points AND the mask tokens
-        x = self.pos_encoder(x)
-
-        # Process the whole sequence simultaneously
-        encoded_seq = self.transformer(x)
-        
-        # Mean Pooling: Compress the time sequence into a single 256-dim context vector
-        latent = encoded_seq.mean(dim=1) 
-        
-        return latent
+from model.transformer_encoded_diffusion_policy.transformer_utils import TransformerTrajectoryEncoder
+from model.transformer_encoded_diffusion_policy.diffusion_utils import DDPMScheduler, ConditionalUNet1D
 
 
 class TedpModel(nn.Module):
@@ -83,10 +25,11 @@ class TedpModel(nn.Module):
         self.embedding_dim = embedding_dim
         self.d_model = d_model
 
-        p_enc = dropout_p[0] # Probability for Encoder (Used in Transformer)
-        p_dec = dropout_p[1] # Probability for Decoder (Used in MLP)
+        # The Noise Scheduler
+        self.num_diffusion_steps = 100
+        self.scheduler = DDPMScheduler(num_train_timesteps=self.num_diffusion_steps)
 
-        # --- Parameter Embedder ---
+        # Parameter Embedder (Late Fusion Prep)
         self.param_embedder = nn.Sequential(
             nn.Linear(d_param, 64),
             nn.LayerNorm(64),
@@ -94,13 +37,13 @@ class TedpModel(nn.Module):
             nn.Linear(64, self.embedding_dim)
         )
 
-        # --- BERT Encoders ---
+        # BERT Encoders
         self.encoder1 = TransformerTrajectoryEncoder(
             input_dim=d_y1, 
             d_model=self.d_model, 
             nhead=nhead, 
             num_layers=num_layers, 
-            dropout=p_enc
+            dropout=dropout_p[0]
         )
         
         self.encoder2 = TransformerTrajectoryEncoder(
@@ -108,51 +51,40 @@ class TedpModel(nn.Module):
             d_model=self.d_model, 
             nhead=nhead, 
             num_layers=num_layers, 
-            dropout=p_enc
+            dropout=dropout_p[0]
         )
 
-        # --- MLP Decoders ---
-        self.decoder1 = nn.Sequential(
-            nn.Linear(d_x + self.d_model + self.embedding_dim, 256), nn.LayerNorm(256), nn.ReLU(), nn.Dropout(p_dec), 
-            nn.Linear(256, 256), nn.LayerNorm(256), nn.ReLU(), nn.Dropout(p_dec),
-            nn.Linear(256, 128), nn.LayerNorm(128), nn.ReLU(), nn.Dropout(p_dec),
-            nn.Linear(128, 64), nn.LayerNorm(64), nn.ReLU(), nn.Dropout(p_dec),
-            nn.Linear(64, (d_y1)*2)
-        )
+        # The U-Net Decoder
+        # cond_dim = Pure Motion Latent (256) + Task Param (16)
+        cond_dim = self.d_model + self.embedding_dim
+        
+        self.unet1 = ConditionalUNet1D(input_dim=d_y1, cond_dim=cond_dim, base_channels=64)
+        self.unet2 = ConditionalUNet1D(input_dim=d_y2, cond_dim=cond_dim, base_channels=64)
 
-        self.decoder2 = nn.Sequential(
-            nn.Linear(d_x + self.d_model + self.embedding_dim, 256), nn.LayerNorm(256), nn.ReLU(), nn.Dropout(p_dec), 
-            nn.Linear(256, 256), nn.LayerNorm(256), nn.ReLU(), nn.Dropout(p_dec),
-            nn.Linear(256, 128), nn.LayerNorm(128), nn.ReLU(), nn.Dropout(p_dec),
-            nn.Linear(128, 64), nn.LayerNorm(64), nn.ReLU(), nn.Dropout(p_dec),
-            nn.Linear(64, (d_y2)*2)
-        )
-
-    def forward(self, y1_seq, y2_seq, params, x_tar, extra_pass, p=0, mask_indices_1=None, mask_indices_2=None):
+    def forward(self, y1_seq, y2_seq, params, extra_pass, p=0, mask_indices_1=None, mask_indices_2=None):
         """
+        TRAINING PASS: Corrupts the target trajectory with noise and asks U-Net to predict the noise.
+
         y1_seq: (batch_size, time_len, d_y1)
         y2_seq: (batch_size, time_len, d_y2)
         params: (batch_size, 1, d_param)
-        x_tar:  (batch_size, num_tar, d_x)
         """
         device = y1_seq.device
+        batch_size = y1_seq.shape[0]
         
-        # 1. Embed Task Parameters
-        p_embedded = self.param_embedder(params) # (batch, 1, 16)
-        p_expanded = p_embedded.expand(-1, x_tar.shape[1], -1) # (batch, num_tar, 16)
+        # Embed Task Parameters
+        p_embedded = self.param_embedder(params).squeeze(1) # Shape: (batch, 16)
 
-        # 2. Encode Forward Trajectory
-        L_F = self.encoder1(y1_seq, mask_indices_1) # (batch, 256)
-        L_F = L_F.unsqueeze(1).expand(-1, x_tar.shape[1], -1) # (batch, num_tar, 256)
+        # Encode Forward Trajectory
+        L_F = self.encoder1(y1_seq, mask_indices_1) # Shape: (batch, 256)
 
-        # 3. Encode Inverse Trajectory (Skip if extra_pass to save compute/avoid garbage data)
+        # Encode Inverse Trajectory
         if not extra_pass:
-            L_I = self.encoder2(y2_seq, mask_indices_2) # (batch, 256)
-            L_I = L_I.unsqueeze(1).expand(-1, x_tar.shape[1], -1) # (batch, num_tar, 256)
+            L_I = self.encoder2(y2_seq, mask_indices_2) # Shape: (batch, 256)
         else:
-            L_I = L_F # Dummy assignment for loss calculation to return 0
+            L_I = L_F # Dummy assignment
 
-        # 4. Route the Latent Vector
+        # Route the Latent Vector
         latent = torch.zeros_like(L_F)
         if p == 0:
             if not extra_pass:
@@ -168,24 +100,96 @@ class TedpModel(nn.Module):
         elif p == 2:
             latent = L_I # Inference: Conditioned on Inverse
 
-        # 5. Decode
-        # concat shape: (batch_size, num_tar, 256 + 16 + d_x)
-        concat = torch.cat((latent, p_expanded, x_tar), dim=-1)  
+        # Late Fusion (Combine Latent + Task Parameters)
+        latent_cond = torch.cat([latent, p_embedded], dim=-1) # Shape: (batch, 272)
         
-        output1 = self.decoder1(concat)  # (batch_size, num_tar, 2*d_y1)
-
+        # Diffusion Noise Process
+        timesteps = torch.randint(0, self.num_diffusion_steps, (batch_size,), device=device).long()
+        
+        # Always process the Forward Trajectory (UNet1)
+        noise1 = torch.randn_like(y1_seq)
+        noisy_y1 = self.scheduler.add_noise(y1_seq, noise1, timesteps)
+        noise_pred1 = self.unet1(noisy_y1, timesteps, latent_cond) # (Batch, Seq_len, d_y1)
+        
         if extra_pass:
-            return torch.cat((output1, output1), dim=-1), L_F, L_F, extra_pass
+            # If extra_pass, duplicate the forward output to maintain consistent tensor dimensions
+            noise_pred = torch.cat((noise_pred1, noise_pred1), dim=-1)
+            noise_truth = torch.cat((noise1, noise1), dim=-1)
+        else:
+            # Process the Inverse Trajectory in parallel (UNet2)
+            noise2 = torch.randn_like(y2_seq)
+            noisy_y2 = self.scheduler.add_noise(y2_seq, noise2, timesteps)
+            noise_pred2 = self.unet2(noisy_y2, timesteps, latent_cond) # (Batch, Seq_len, d_y2)
+            
+            # Concatenate both predictions and both truths
+            noise_pred = torch.cat((noise_pred1, noise_pred2), dim=-1)
+            noise_truth = torch.cat((noise1, noise2), dim=-1)
 
-        output2 = self.decoder2(concat)  # (batch_size, num_tar, 2*d_y2)
-        return torch.cat((output1, output2), dim=-1), L_F, L_I, extra_pass
-
-
-def loss(output, target_f, target_i, d_y1, d_y2, d_param, L_F, L_I, extra_pass, lambda1=1.0, lambda2=0.1):
-    # Standard log probability loss
-    log_prob = loss_utils.log_prob_loss(output, target_f, target_i, d_y1, d_y2, d_param, extra_pass)
+        return noise_pred, noise_truth, L_F, L_I, extra_pass
     
-    # Raw Latent Alignment Loss (Preserves spatial magnitude)
+    @torch.no_grad()
+    def sample(self, y1_seq, params, mask_indices_1=None, target_dim='y2', time_len=200):
+        """
+        INFERENCE PASS: Zero-Shot Task Inversion.
+        Generates the trajectory iteratively from pure noise.
+
+        y1_seq: (batch_size, time_len, d_y1)
+        params: (batch_size, 1, d_param)
+        """
+        self.eval()
+        device = y1_seq.device
+        batch_size = y1_seq.shape[0]
+        
+        # Extract context directly from Forward sequence
+        p_embedded = self.param_embedder(params).squeeze(1)
+        L_F = self.encoder1(y1_seq, mask_indices_1)
+        latent_cond = torch.cat([L_F, p_embedded], dim=-1)
+        
+        unet = self.unet2 if target_dim == 'y2' else self.unet1
+        dim_y = self.d_y2 if target_dim == 'y2' else self.d_y1
+        
+        # Start with pure Gaussian noise X_T
+        seq = torch.randn((batch_size, time_len, dim_y), device=device)
+        
+        # Standard DDPM Reverse Loop
+        for k in reversed(range(self.num_diffusion_steps)):
+            timesteps = torch.full((batch_size,), k, device=device, dtype=torch.long)
+            
+            # Predict noise
+            noise_pred = unet(seq, timesteps, latent_cond)
+            
+            # DDPM Step Math
+            alpha_k = (1.0 - self.scheduler.betas[k]).to(device)
+            alpha_cum_k = self.scheduler.alphas_cumprod[k].to(device)
+            beta_k = self.scheduler.betas[k].to(device)
+            
+            # Remove the predicted noise from the sequence
+            # Equation: y_{k-1} = 1/sqrt(alpha) * (y_k - (1-alpha)/sqrt(1-alpha_cum) * noise_pred)
+            seq = (1.0 / torch.sqrt(alpha_k)) * (seq - ((1.0 - alpha_k) / torch.sqrt(1.0 - alpha_cum_k)) * noise_pred)
+            
+            # Add stochastic variance back in, unless we are at the final step (k=0)
+            if k > 0:
+                noise = torch.randn_like(seq)
+                sigma_k = torch.sqrt(beta_k) 
+                seq = seq + sigma_k * noise
+                
+        self.train()
+        return seq
+
+
+def loss(noise_pred, noise_truth, L_F, L_I, extra_pass, d_y1, lambda1=1.0, lambda2=0.1):
+    # Denoising Loss
+    if extra_pass:
+        # We only care about the forward trajectory, so we slice the first d_y1 dimensions
+        # This prevents double-weighting the MSE on the duplicated y1 tensors
+        pred1 = noise_pred[..., :d_y1]
+        truth1 = noise_truth[..., :d_y1]
+        mse_loss = F.mse_loss(pred1, truth1)
+    else:
+        # Calculate MSE across both the forward and inverse trajectories simultaneously
+        mse_loss = F.mse_loss(noise_pred, noise_truth)
+    
+    # Latent Alignment Loss
     latent_alignment_loss = torch.mean((L_F - L_I) ** 2)
 
-    return lambda1 * log_prob + lambda2 * latent_alignment_loss
+    return (lambda1 * mse_loss) + (lambda2 * latent_alignment_loss)
