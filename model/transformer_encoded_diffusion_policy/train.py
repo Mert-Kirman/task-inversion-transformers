@@ -117,31 +117,25 @@ def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_rec
             y1_seq = batch['y1_seq'].to(device)
             y2_seq = batch['y2_seq'].to(device)
             params = batch['context'].unsqueeze(1).to(device) 
-            x_tar = batch['x_tar'].to(device)
-            y_tar_f = batch['y_tar_f'].to(device)
-            y_tar_i = batch['y_tar_i'].to(device)
 
             optimizer.zero_grad()
 
             batch_size = y1_seq.shape[0]
             time_len = y1_seq.shape[1]
-            
-            mask1 = None
-            mask2 = None
 
             # Choose a random drop probability for THIS specific batch
             # This ensures the model learns to handle full sequences AND sparse points.
             drop_prob = torch.rand(1).item() * mask_drop_prob_max
             
-            # Create boolean masks (True means replace with [MASK] token)
+            # Create boolean masks for the BERT encoders (True means replace with [MASK] token)
             mask1 = torch.rand(batch_size, time_len, device=device) < drop_prob
             mask2 = torch.rand(batch_size, time_len, device=device) < drop_prob
             
-            # Forward pass
-            output, L_F, L_I, extra_pass = model(y1_seq, y2_seq, params, x_tar, extra_pass, mask_indices_1=mask1, mask_indices_2=mask2)
+            # Forward pass: Adds noise and returns the U-Net's noise prediction
+            noise_pred, noise_truth, L_F, L_I, extra_pass = model(y1_seq, y2_seq, params, extra_pass, mask_indices_1=mask1, mask_indices_2=mask2)
             
-            # Loss calculation
-            loss = tedp_model.loss(output, y_tar_f, y_tar_i, d_y1, d_y2, d_param, L_F.squeeze(1), L_I.squeeze(1), extra_pass)
+            # Diffusion Loss calculation (MSE of noise + Latent Alignment)
+            loss = tedp_model.loss(noise_pred, noise_truth, L_F, L_I, extra_pass, d_y1)
             
             loss.backward()
             raw_grad_norm = get_grad_norm(model)
@@ -172,38 +166,28 @@ def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_rec
                     y1_seq = train_batch['y1_seq'].to(device)
                     y2_seq = train_batch['y2_seq'].to(device)
                     params = train_batch['context'].unsqueeze(1).to(device)
-
-                    # Generate all time points for the full trajectory
-                    batch_size = y1_seq.shape[0]
                     time_len = y1_seq.shape[1]
-                    x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1).repeat(batch_size, 1, 1)
                 
-                    output, _, _, _ = model(y1_seq, y2_seq, params, x_full, extra_pass=False, p=1) # p=1 forces L_F
-                    pred_mean_f, _, pred_mean_i, _ = output.chunk(4, dim=-1)
+                    # Use Diffusion Sampling to iteratively build the trajectories
+                    pred_fwd = model.sample(y1_seq, params, target_dim='y1', time_len=time_len)
+                    pred_inv = model.sample(y1_seq, params, target_dim='y2', time_len=time_len)
                     
-                    # Compare full prediction against full ground truth sequences
-                    epoch_train_fwd_mse += torch.nn.functional.mse_loss(pred_mean_f, y1_seq).item()
-                    epoch_train_inv_mse += torch.nn.functional.mse_loss(pred_mean_i, y2_seq).item()
+                    epoch_train_fwd_mse += torch.nn.functional.mse_loss(pred_fwd, y1_seq).item()
+                    epoch_train_inv_mse += torch.nn.functional.mse_loss(pred_inv, y2_seq).item()
 
                 # 2. Evaluate on Validation Data
                 for val_batch in val_loader:
                     y1_seq = val_batch['y1_seq'].to(device)
                     y2_seq = val_batch['y2_seq'].to(device)
                     params = val_batch['context'].unsqueeze(1).to(device)
-
-                    # Generate all time points for the full trajectory
-                    batch_size = y1_seq.shape[0]
                     time_len = y1_seq.shape[1]
-                    x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1).repeat(batch_size, 1, 1)
                     
-                    # Validation is always evaluated on Task Inversion (extra_pass = False)
-                    # so we test its actual primary objective.
-                    output, _, _, _ = model(y1_seq, y2_seq, params, x_full, extra_pass=False, p=1) # p=1 means we condition on forward trajectory for inference (forces L_F to be used in decoding)
-                    pred_mean_f, _, pred_mean_i, _ = output.chunk(4, dim=-1)
+                    # Diffusion Sampling
+                    pred_fwd = model.sample(y1_seq, params, target_dim='y1', time_len=time_len)
+                    pred_inv = model.sample(y1_seq, params, target_dim='y2', time_len=time_len)
                     
-                    # Compare full prediction against full ground truth sequences
-                    epoch_val_fwd_mse += torch.nn.functional.mse_loss(pred_mean_f, y1_seq).item()
-                    epoch_val_inv_mse += torch.nn.functional.mse_loss(pred_mean_i, y2_seq).item()
+                    epoch_val_fwd_mse += torch.nn.functional.mse_loss(pred_fwd, y1_seq).item()
+                    epoch_val_inv_mse += torch.nn.functional.mse_loss(pred_inv, y2_seq).item()
             
             # Calculate averages
             avg_train_fwd_mse = epoch_train_fwd_mse / len(train_reconstruction_loader)
@@ -229,7 +213,7 @@ def train(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_rec
 
             tqdm.write(f"Epoch {epoch}, Train Inv MSE: {avg_train_inv_mse:.6f}, Val Inv MSE: {avg_val_inv_mse:.6f}, Grad Norm: {avg_grad_norm:.4f}")
             
-            # --- Save Best Model strictly based on Zero-Shot Inversion Performance ---
+            # Save Best Model strictly based on Zero-Shot Inversion Performance
             if avg_val_inv_mse < best_val_inv_mse:
                 best_val_inv_mse = avg_val_inv_mse
                 tqdm.write(f"*** New Best Model Saved with Val Inversion MSE: {avg_val_inv_mse:.6f} ***")
@@ -278,7 +262,7 @@ if __name__ == "__main__":
     )
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_folder = f"model/transformer_encoded_movement_primitive/save/run_{run_id}"
+    save_folder = f"model/transformer_encoded_diffusion_policy/save/run_{run_id}"
     os.makedirs(save_folder, exist_ok=True)
 
     # Save the test indices so evaluation script knows exactly which data was held out
