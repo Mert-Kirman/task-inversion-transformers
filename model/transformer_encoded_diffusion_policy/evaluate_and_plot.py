@@ -18,7 +18,7 @@ import model.model_predict as model_predict
 import model.utils as utils
 
 # ================= CONFIGURATION =================
-run_id = "run_20260408_204033"
+run_id = "run_20260418_194212"
 save_path = f"model/transformer_encoded_diffusion_policy/save/{run_id}"
 # =================================================
 
@@ -162,13 +162,13 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
     
     print("Running Zero-Shot Inference (Conditioning on start and end points of inverse trajectories)...")
     for i in test_idx:
-        # 1. Grab the full Forward Trajectory
+        # Grab the full Forward Trajectory
         y1_seq = full_dataset.Y1[i].unsqueeze(0).to(device)
         
-        # 2. Grab the Inverse Trajectory
+        # Grab the Inverse Trajectory
         y2_seq = full_dataset.Y2[i].unsqueeze(0).to(device)
         
-        # 3. Context
+        # Context
         curr_context = full_dataset.C[i].view(1, 1, -1).to(device)
 
         # Condition points
@@ -176,18 +176,15 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
         eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
         eval_mask[0, condition_points] = False # Set condition points to False (Observed)
         
-        # 4. Run Inference (p=2 forces Decoder to use L_I to generate Forward and Inverse trajectories)
+        # Run Diffusion Inference
         with torch.no_grad():
-            output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=2, mask_indices_2=eval_mask)
-            
-        # 5. Extract the Predicted Inverse Trajectory
-        _, _, pred_mean_i, _ = output.chunk(4, dim=-1)
+            pred_seq = model.sample(cond_seq=y2_seq, params=curr_context, mask_indices=eval_mask, source_dim='y2', target_dim='y2', time_len=time_len)
         
-        # 6. Denormalize Predictions and Ground Truth to physical scale
-        pred_traj = denormalize_data(pred_mean_i.squeeze(0), Y_min_vals, Y_max_vals).cpu().numpy()
+        # Denormalize Predictions and Ground Truth to physical scale
+        pred_traj = denormalize_data(pred_seq.squeeze(0), Y_min_vals, Y_max_vals).cpu().numpy()
         gt_traj = denormalize_data(full_dataset.Y2[i].to(device), Y_min_vals, Y_max_vals).cpu().numpy()
         
-        # 7. Identify Object Type dynamically via Context ID
+        # Identify Object Type dynamically via Context ID
         curr_context_norm = full_dataset.C[i]
         raw_id = denormalize_data(curr_context_norm, C_min_val, C_max_val)[-1].item()
         
@@ -347,15 +344,12 @@ def calculate_continuous_errors_and_plot(base_data_folder, device='cpu'):
         eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
         eval_mask[0, condition_points] = False # Set condition points to False (Observed)
         
-        # Run Inference (p=2 forces Decoder to use L_I to generate Forward and Inverse trajectories)
+        # Run Diffusion Inference
         with torch.no_grad():
-            output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=2, mask_indices_2=eval_mask)
-            
-        # Extract the Predicted Inverse Trajectory
-        _, _, pred_mean_i, _ = output.chunk(4, dim=-1)
+            pred_seq = model.sample(cond_seq=y2_seq, params=curr_context, mask_indices=eval_mask, source_dim='y2', target_dim='y2', time_len=time_len)
         
         # Denormalize Predictions and Ground Truth to physical scale
-        pred_traj = denormalize_data(pred_mean_i.squeeze(0), Y_min_vals, Y_max_vals).cpu().numpy()
+        pred_traj = denormalize_data(pred_seq.squeeze(0), Y_min_vals, Y_max_vals).cpu().numpy()
         gt_traj = denormalize_data(full_dataset.Y2[i].to(device), Y_min_vals, Y_max_vals).cpu().numpy()
         
         # Identify Object Type dynamically via Context ID
@@ -537,6 +531,8 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
         fig, axes = plt.subplots(num_to_plot, d_y2, figsize=(15, 4 * num_to_plot))
         if num_to_plot == 1: axes = np.expand_dims(axes, 0) 
 
+        num_mc_samples = 10 # Number of diffusion generations for uncertainty estimation
+
         for row_idx, traj_idx in enumerate(indices):
             # Identify Object Type dynamically via Context ID
             curr_context_norm = full_dataset.C[traj_idx]
@@ -558,7 +554,8 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
             y2_seq = full_dataset.Y2[traj_idx].unsqueeze(0).to(device)
             curr_context = full_dataset.C[traj_idx].view(1, 1, -1).to(device)
 
-            # --- C. Run Inference ---
+            # --- C. Run Inference (Monte Carlo Sampling) ---
+            samples = []
             with torch.no_grad():
                 if mode['p'] == 1:
                     # Condition on the Forward Trajectory
@@ -566,27 +563,25 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
                     eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
                     eval_mask[0, condition_points] = False # Set condition points to False (Observed)
 
-                    # The p=mode['p'] parameter forces the decoder to use the correct latent vector.
-                    output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=mode['p'], mask_indices_1=eval_mask)
+                    for _ in range(num_mc_samples):
+                        pred = model.sample(cond_seq=y1_seq, params=curr_context, mask_indices=eval_mask, source_dim='y1', target_dim='y2', time_len=time_len)
+                        samples.append(pred.squeeze(0))
                 else:
-                    # Condition on the Inverse Trajectory
-                    condition_points = [0, -1] # t=0 and t=1 of the inverse trajectory corresponds to indices 0 and 199 (since time_len=200)
-                    eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
-                    eval_mask[0, condition_points] = False # Set condition points to False (Observed)
+                    # Condition on Inverse Trajectory
+                    condition_points = [0, -1] 
+                    eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) 
+                    eval_mask[0, condition_points] = False 
 
-                    # The p=mode['p'] parameter forces the decoder to use the correct latent vector.
-                    output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=mode['p'], mask_indices_2=eval_mask)
+                    for _ in range(num_mc_samples):
+                        pred = model.sample(cond_seq=y2_seq, params=curr_context, mask_indices=eval_mask, source_dim='y2', target_dim='y2', time_len=time_len)
+                        samples.append(pred.squeeze(0))
 
-                # Extract the Inverse Trajectory predictions (Mean and Log-Variance)
-                _, _, pred_mean_i_norm, pred_std_i_norm = output.chunk(4, dim=-1)
-                
-                # Convert log variance parameter to standard deviation
-                pred_std_i_norm = torch.log(1 + torch.exp(pred_std_i_norm))
+                # Calculate Empirical Mean and Standard Deviation across the 10 samples
+                samples_tensor = torch.stack(samples) # Shape: (10, 200, 3)
+                pred_mean_i_norm = samples_tensor.mean(dim=0)
+                pred_std_i_norm = samples_tensor.std(dim=0)
                 
             # --- D. Denormalize Output ---
-            pred_mean_i_norm = pred_mean_i_norm.squeeze(0)
-            pred_std_i_norm = pred_std_i_norm.squeeze(0)
-
             # Denormalize means back to workspace coordinates
             means_pred = denormalize_data(pred_mean_i_norm, Y_min_vals, Y_max_vals).cpu().numpy()
             
@@ -608,13 +603,13 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
                 ax.plot(time_steps, means_pred[:, col_idx], 
                         color='blue', linestyle='--', linewidth=2, label='Pred')
                 
-                # 3. Uncertainty
+                # 3. Uncertainty (Empirical Std Dev)
                 sigma = stds_pred[:, col_idx]
                 mean_curve = means_pred[:, col_idx]
                 ax.fill_between(time_steps, mean_curve - 2*sigma, mean_curve + 2*sigma, 
                                 color='blue', alpha=0.1, label='Uncertainty')
                 
-                # 4. Condition Points (Only for mode['p'] == 2 since that's where we condition on the inverse trajectory)
+                # 4. Condition Points
                 if mode['p'] == 2:
                     for idx in condition_points:
                         ax.scatter(time_steps[idx], curr_y_truth_raw[idx, col_idx], color='red', marker='o', s=80, label='Condition Point' if idx == condition_points[0] else "")
