@@ -128,22 +128,24 @@ class TedpModel(nn.Module):
         return noise_pred, noise_truth, L_F, L_I, extra_pass
     
     @torch.no_grad()
-    def sample(self, y1_seq, params, mask_indices_1=None, target_dim='y2', time_len=200):
+    def sample(self, cond_seq, params, mask_indices=None, source_dim='y1', target_dim='y2', time_len=200):
         """
         INFERENCE PASS: Zero-Shot Task Inversion.
         Generates the trajectory iteratively from pure noise.
 
-        y1_seq: (batch_size, time_len, d_y1)
+        cond_seq: (batch_size, time_len, d_y1)
         params: (batch_size, 1, d_param)
         """
         self.eval()
-        device = y1_seq.device
-        batch_size = y1_seq.shape[0]
+        device = cond_seq.device
+        batch_size = cond_seq.shape[0]
         
         # Extract context directly from Forward sequence
         p_embedded = self.param_embedder(params).squeeze(1)
-        L_F = self.encoder1(y1_seq, mask_indices_1)
-        latent_cond = torch.cat([L_F, p_embedded], dim=-1)
+        encoder = self.encoder1 if source_dim == 'y1' else self.encoder2
+        L_cond = encoder(cond_seq, mask_indices)
+        
+        latent_cond = torch.cat([L_cond, p_embedded], dim=-1)
         
         unet = self.unet2 if target_dim == 'y2' else self.unet1
         dim_y = self.d_y2 if target_dim == 'y2' else self.d_y1
