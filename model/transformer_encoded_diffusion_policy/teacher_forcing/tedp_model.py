@@ -2,7 +2,7 @@ import sys
 import os
 
 # Add project root to Python path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
@@ -11,7 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from model.transformer_encoded_diffusion_policy.transformer_utils import TransformerTrajectoryEncoder
-from model.transformer_encoded_diffusion_policy.diffusion_utils import DDPMScheduler, ConditionalUNet1D
+from model.transformer_encoded_diffusion_policy.teacher_forcing.diffusion_utils import DDPMScheduler, ConditionalUNet1D
 
 
 class TedpModel(nn.Module):
