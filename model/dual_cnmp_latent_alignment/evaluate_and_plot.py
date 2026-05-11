@@ -487,6 +487,10 @@ def calculate_continuous_errors_and_plot(device='cpu'):
                 for val in error_data[m][k]:
                     rows.append({'Metric': m, 'Object': obj_label, 'Error (cm)': val})
         df = pd.DataFrame(rows)
+
+        # Save the error data for further plotting
+        csv_filename = filename.replace('.png', '.csv')
+        df.to_csv(os.path.join(save_path, csv_filename), index=False)
         
         fig, axes = plt.subplots(4, 1, figsize=(14, 18))
         fig.suptitle(f'Trajectory {time_title} Deviation', fontsize=18, fontweight='bold', y=0.98)
