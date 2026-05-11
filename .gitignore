@@ -14,3 +14,4 @@ data/plots_warped_full/
 data/reassemble_extra_info/
 wandb/
 *.csv
+model_comparisons/
