@@ -1,6 +1,5 @@
 import os
 import numpy as np
-import math
 import matplotlib.pyplot as plt
 
 def cubic_bezier(p0, p1, p2, p3, num_points=200):
@@ -73,7 +72,7 @@ def generate_synthetic_dataset(base_dir="data/synthetic_trajectories", num_objec
     print("\nGeneration Complete!")
     print("To use this, update dataset.py object_config to point to 'synthetic_obj_0' through 'synthetic_obj_4'.")
 
-def plot_example_trajectories():
+def plot_example_trajectories_single_object():
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
 
@@ -116,8 +115,54 @@ def plot_example_trajectories():
     plt.legend()
     plt.show()
 
+def plot_example_trajectories_multiple_objects():
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+
+    for obj_id in range(5):
+        # Define base locations for this specific object in the workspace
+        # Object 0 is at X=0.1, Object 1 is at X=0.2, etc.
+        base_pick = np.array([0.1 + (obj_id * 0.1), 0.2, 0.0])
+        base_mid  = np.array([0.1 + (obj_id * 0.1), 0.5, 0.0])
+        base_drop = np.array([0.1 + (obj_id * 0.1), 0.8, 0.0])
+
+        # Plot 20 samples
+        for _ in range(20):
+            # Jitter X and Y, keep Z=0 (table level)
+            pick_jitter = np.random.uniform(-0.02, 0.02, 3); pick_jitter[2] = 0
+            mid_jitter = np.random.uniform(-0.02, 0.02, 3); mid_jitter[2] = 0
+            drop_jitter = np.random.uniform(-0.02, 0.02, 3); drop_jitter[2] = 0
+            
+            pt_A = base_pick + pick_jitter
+            pt_B = base_mid + mid_jitter
+            pt_C = base_drop + drop_jitter
+            
+            # Generate curves with an apex of Z=0.15 (15cm high)
+            fwd_p1 = pt_A + np.array([0, 0.05, 0.15]) 
+            fwd_p2 = pt_B + np.array([0, -0.05, 0.15])
+            fwd_traj = cubic_bezier(pt_A, fwd_p1, fwd_p2, pt_B, 200)
+            
+            inv_p1 = pt_B + np.array([0, 0.05, 0.15])
+            inv_p2 = pt_C + np.array([0, -0.05, 0.15])
+            inv_traj = cubic_bezier(pt_B, inv_p1, inv_p2, pt_C, 200)
+            
+            ax.plot(fwd_traj[:, 0], fwd_traj[:, 1], fwd_traj[:, 2], color='blue', alpha=0.2)
+            ax.plot(inv_traj[:, 0], inv_traj[:, 1], inv_traj[:, 2], color='orange', alpha=0.2)
+
+        ax.scatter(*base_pick, color='red', s=100, label='Pick Zone' if obj_id == 0 else "")
+        ax.scatter(*base_mid, color='green', s=100, label='Mid Zone' if obj_id == 0 else "")
+        ax.scatter(*base_drop, color='purple', s=100, label='Drop Zone' if obj_id == 0 else "")
+
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('Synthetic Pick-and-Place (Forward=Blue, Inverse=Orange)')
+    plt.legend()
+    plt.show()
+
 if __name__ == "__main__":
-    # plot_example_trajectories()
+    # plot_example_trajectories_single_object()
+    # plot_example_trajectories_multiple_objects()
 
     # Generate 2,000 trajectories per object * 5 objects = 10,000 total pairs
     generate_synthetic_dataset(base_dir="data/synthetic_trajectories", num_objects=5, paired_samples=2000)
