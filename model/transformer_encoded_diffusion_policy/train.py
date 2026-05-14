@@ -14,7 +14,7 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
 from dataset import ReassembleDataset
-import model.transformer_encoded_diffusion_policy.tedp_model as tedp_model
+import model.transformer_encoded_diffusion_policy.cross_attention_conditioning.tedp_model as tedp_model
 import model.utils as utils
 
 

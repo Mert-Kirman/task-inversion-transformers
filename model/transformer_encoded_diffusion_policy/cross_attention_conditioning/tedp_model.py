@@ -58,8 +58,8 @@ class TedpModel(nn.Module):
         # cond_dim = Pure Motion Latent (256) + Task Param (16)
         cond_dim = self.d_model + self.embedding_dim
         
-        self.unet1 = ConditionalUNet1D(input_dim=d_y1, cond_dim=cond_dim, base_channels=64)
-        self.unet2 = ConditionalUNet1D(input_dim=d_y2, cond_dim=cond_dim, base_channels=64)
+        self.unet1 = ConditionalUNet1D(input_dim=d_y1, global_cond_dim=self.embedding_dim, context_dim=self.d_model, base_channels=64)
+        self.unet2 = ConditionalUNet1D(input_dim=d_y2, global_cond_dim=self.embedding_dim, context_dim=self.d_model, base_channels=64)
 
     def forward(self, y1_seq, y2_seq, params, extra_pass, p=0, mask_indices_1=None, mask_indices_2=None):
         """
@@ -72,44 +72,36 @@ class TedpModel(nn.Module):
         device = y1_seq.device
         batch_size = y1_seq.shape[0]
         
-        # Embed Task Parameters
-        p_embedded = self.param_embedder(params).squeeze(1) # Shape: (batch, 16)
+        # Global Condition (Task Parameters)
+        p_embedded = self.param_embedder(params).squeeze(1) # (batch, 16)
 
-        # Encode Forward Trajectory
-        L_F = self.encoder1(y1_seq, mask_indices_1) # Shape: (batch, 256)
-
-        # Encode Inverse Trajectory
+        # Sequence Condition (Full Transformer Latent Maps)
+        L_F = self.encoder1(y1_seq, mask_indices_1) # (batch, 200, 256)
         if not extra_pass:
-            L_I = self.encoder2(y2_seq, mask_indices_2) # Shape: (batch, 256)
+            L_I = self.encoder2(y2_seq, mask_indices_2)
         else:
-            L_I = L_F # Dummy assignment
+            L_I = L_F
 
         # Route the Latent Vector
-        latent = torch.zeros_like(L_F)
+        latent_seq = torch.zeros_like(L_F)
         if p == 0:
             if not extra_pass:
                 # Discrete Routing for Latent Alignment
-                if torch.rand(1, device=device).item() < 0.5:
-                    latent = L_F
-                else:
-                    latent = L_I
+                if torch.rand(1, device=device).item() < 0.5: latent_seq = L_F
+                else: latent_seq = L_I
             else:
-                latent = L_F
-        elif p == 1:
-            latent = L_F # Inference: Conditioned on Forward
-        elif p == 2:
-            latent = L_I # Inference: Conditioned on Inverse
+                latent_seq = L_F
+        elif p == 1: latent_seq = L_F # Inference: Conditioned on Forward
+        elif p == 2: latent_seq = L_I # Inference: Conditioned on Inverse
 
-        # Late Fusion (Combine Latent + Task Parameters)
-        latent_cond = torch.cat([latent, p_embedded], dim=-1) # Shape: (batch, 272)
-        
         # Diffusion Noise Process
         timesteps = torch.randint(0, self.num_diffusion_steps, (batch_size,), device=device).long()
         
         # Always process the Forward Trajectory (UNet1)
         noise1 = torch.randn_like(y1_seq)
         noisy_y1 = self.scheduler.add_noise(y1_seq, noise1, timesteps)
-        noise_pred1 = self.unet1(noisy_y1, timesteps, latent_cond) # (Batch, Seq_len, d_y1)
+        # PASS BOTH CONDITIONS TO UNET
+        noise_pred1 = self.unet1(noisy_y1, timesteps, global_cond=p_embedded, context_seq=latent_seq) 
         
         if extra_pass:
             # If extra_pass, duplicate the forward output to maintain consistent tensor dimensions
@@ -119,9 +111,9 @@ class TedpModel(nn.Module):
             # Process the Inverse Trajectory in parallel (UNet2)
             noise2 = torch.randn_like(y2_seq)
             noisy_y2 = self.scheduler.add_noise(y2_seq, noise2, timesteps)
-            noise_pred2 = self.unet2(noisy_y2, timesteps, latent_cond) # (Batch, Seq_len, d_y2)
+            # PASS BOTH CONDITIONS TO UNET
+            noise_pred2 = self.unet2(noisy_y2, timesteps, global_cond=p_embedded, context_seq=latent_seq) 
             
-            # Concatenate both predictions and both truths
             noise_pred = torch.cat((noise_pred1, noise_pred2), dim=-1)
             noise_truth = torch.cat((noise1, noise2), dim=-1)
 
@@ -140,12 +132,10 @@ class TedpModel(nn.Module):
         device = cond_seq.device
         batch_size = cond_seq.shape[0]
         
-        # Extract context directly from Forward sequence
         p_embedded = self.param_embedder(params).squeeze(1)
-        encoder = self.encoder1 if source_dim == 'y1' else self.encoder2
-        L_cond = encoder(cond_seq, mask_indices)
         
-        latent_cond = torch.cat([L_cond, p_embedded], dim=-1)
+        encoder = self.encoder1 if source_dim == 'y1' else self.encoder2
+        latent_seq = encoder(cond_seq, mask_indices) # Full Sequence Context
         
         unet = self.unet2 if target_dim == 'y2' else self.unet1
         dim_y = self.d_y2 if target_dim == 'y2' else self.d_y1
@@ -157,8 +147,8 @@ class TedpModel(nn.Module):
         for k in reversed(range(self.num_diffusion_steps)):
             timesteps = torch.full((batch_size,), k, device=device, dtype=torch.long)
             
-            # Predict noise
-            noise_pred = unet(seq, timesteps, latent_cond)
+            # Predict noise using Cross Attention
+            noise_pred = unet(seq, timesteps, global_cond=p_embedded, context_seq=latent_seq)
             
             # DDPM Step Math
             alpha_k = (1.0 - self.scheduler.betas[k]).to(device)

@@ -113,11 +113,47 @@ class ConditionalResidualBlock1D(nn.Module):
         return x + residual
 
 
+class CrossAttention1D(nn.Module):
+    """
+    Allows the U-Net to look at the un-pooled Transformer sequence.
+    The U-Net feature map acts as the Query, and the Transformer sequence acts as Key/Value.
+    """
+    def __init__(self, query_dim, context_dim, nhead=4):
+        super().__init__()
+        self.norm = nn.GroupNorm(8, query_dim)
+        
+        # kdim and vdim allow us to attend to the 256-dim context while the U-Net features are a different dimension
+        self.attn = nn.MultiheadAttention(
+            embed_dim=query_dim, 
+            kdim=context_dim, 
+            vdim=context_dim, 
+            num_heads=nhead, 
+            batch_first=True
+        )
+
+    def forward(self, x, context_seq):
+        # x: U-Net feature map (Batch, Channels, Length) -> (Batch, Length, Channels)
+        x_seq = x.transpose(1, 2)
+        
+        # Pre-Norm for stability
+        x_norm = self.norm(x).transpose(1, 2)
+        
+        # Cross-Attention: 
+        # Query = U-Net features. Key/Value = Transformer Output
+        # Even if x_norm is length 50 (due to pooling), it can attend to the full length 200 context_seq
+        attn_out, _ = self.attn(query=x_norm, key=context_seq, value=context_seq)
+        
+        # Residual connection
+        out = x_seq + attn_out
+        
+        # Transpose back to U-Net channel-first format (Batch, Channels, Length)
+        return out.transpose(1, 2)
+
+
 class ConditionalUNet1D(nn.Module):
-    def __init__(self, input_dim, cond_dim, base_channels=64):
+    def __init__(self, input_dim, global_cond_dim, context_dim, base_channels=64):
         super().__init__()
         
-        # Diffusion timestep embedding dimension
         self.time_emb_dim = 64
         self.time_mlp = nn.Sequential(
             SinusoidalPosEmb(self.time_emb_dim),
@@ -126,73 +162,77 @@ class ConditionalUNet1D(nn.Module):
             nn.Linear(self.time_emb_dim * 2, self.time_emb_dim)
         )
 
-        # The total conditioning dimension is the Latent Vector + Timestep Embedding
-        # Example: 128 (L_F from BERT) + 64 (time) = 192
-        total_cond_dim = cond_dim + self.time_emb_dim
+        # Global Cond is Time Embedding + Task Parameters (e.g., 64 + 16)
+        total_global_cond_dim = global_cond_dim + self.time_emb_dim
 
-        # Initial Projection
         self.init_conv = nn.Conv1d(input_dim, base_channels, kernel_size=3, padding=1)
 
         # Downsampling path (Reduces sequence length, increases channels)
         # Sequence: 200 -> 100 -> 50
-        self.down1 = ConditionalResidualBlock1D(base_channels, base_channels * 2, total_cond_dim)
-        self.down2 = ConditionalResidualBlock1D(base_channels * 2, base_channels * 4, total_cond_dim)
+        self.down1 = ConditionalResidualBlock1D(base_channels, base_channels * 2, total_global_cond_dim)
+        self.attn_down1 = CrossAttention1D(base_channels * 2, context_dim)
+        
+        self.down2 = ConditionalResidualBlock1D(base_channels * 2, base_channels * 4, total_global_cond_dim)
+        self.attn_down2 = CrossAttention1D(base_channels * 4, context_dim)
+        
         self.pool = nn.MaxPool1d(kernel_size=2)
 
         # Bottleneck (Processes the most compressed, feature-rich trajectory representation)
-        self.bottleneck = ConditionalResidualBlock1D(base_channels * 4, base_channels * 4, total_cond_dim)
+        self.bottleneck = ConditionalResidualBlock1D(base_channels * 4, base_channels * 4, total_global_cond_dim)
+        self.attn_mid = CrossAttention1D(base_channels * 4, context_dim)
 
         # Upsampling path (Increases sequence length, decreases channels)
         # Sequence: 50 -> 100 -> 200
         self.up_sample = nn.Upsample(scale_factor=2, mode='nearest')
         
         # The in_channels are multiplied by 2 because of skip connection concatenation
-        self.up1 = ConditionalResidualBlock1D(base_channels * 8, base_channels * 2, total_cond_dim)
-        self.up2 = ConditionalResidualBlock1D(base_channels * 4, base_channels, total_cond_dim)
+        self.up1 = ConditionalResidualBlock1D(base_channels * 8, base_channels * 2, total_global_cond_dim)
+        self.attn_up1 = CrossAttention1D(base_channels * 2, context_dim)
+        
+        self.up2 = ConditionalResidualBlock1D(base_channels * 4, base_channels, total_global_cond_dim)
+        self.attn_up2 = CrossAttention1D(base_channels, context_dim)
 
         # Final Projection back to physical coordinates (e.g., 3 for X, Y, Z)
         self.final_conv = nn.Conv1d(base_channels, input_dim, kernel_size=3, padding=1)
 
-    def forward(self, x, timesteps, latent_cond):
+    def forward(self, x, timesteps, global_cond, context_seq):
         """
-        x: Noisy trajectory (Batch, Seq_len, d_y)
-        timesteps: Diffusion steps (Batch,)
-        latent_cond: Context from BERT (Batch, cond_dim)
+        global_cond: (Batch, global_cond_dim) - Used for global shift addition
+        context_seq: (Batch, Seq_len, context_dim) - Used for cross-attention mapping
         """
         # PyTorch Conv1d expects shape (Batch, Channels, Seq_len)
-        # Transpose the input trajectory
+        # Transpose the input trajectory from (Batch, Seq_len, input_dim) to (Batch, input_dim, Seq_len)
         x = x.transpose(1, 2) 
 
-        # Prepare Global Conditioning
         t_emb = self.time_mlp(timesteps) # (Batch, time_emb_dim)
-        global_cond = torch.cat([t_emb, latent_cond], dim=-1) # (Batch, total_cond_dim)
+        g_cond = torch.cat([t_emb, global_cond], dim=-1) # (Batch, total_cond_dim)
 
-        # Initial Convolution
         x = self.init_conv(x) # (Batch, base_channels, 200)
 
         # Down-path
-        skip1 = self.down1(x, global_cond) # (Batch, base_channels*2, 200)
-        x_down = self.pool(skip1)          # (Batch, base_channels*2, 100)
+        skip1 = self.down1(x, g_cond)
+        skip1 = self.attn_down1(skip1, context_seq)
+        x_down = self.pool(skip1)
         
-        skip2 = self.down2(x_down, global_cond) # (Batch, base_channels*4, 100)
-        x_down = self.pool(skip2)               # (Batch, base_channels*4, 50)
+        skip2 = self.down2(x_down, g_cond)
+        skip2 = self.attn_down2(skip2, context_seq)
+        x_down = self.pool(skip2)
 
         # Bottleneck
-        x_mid = self.bottleneck(x_down, global_cond) # (Batch, base_channels*4, 50)
+        x_mid = self.bottleneck(x_down, g_cond)
+        x_mid = self.attn_mid(x_mid, context_seq)
 
         # Up-path
-        x_up = self.up_sample(x_mid) # (Batch, base_channels*4, 100)
-        # Concatenate skip connection 2
-        x_up = torch.cat([x_up, skip2], dim=1) # (Batch, base_channels*8, 100)
-        x_up = self.up1(x_up, global_cond) # (Batch, base_channels*2, 100)
+        x_up = self.up_sample(x_mid)
+        x_up = torch.cat([x_up, skip2], dim=1)
+        x_up = self.up1(x_up, g_cond)
+        x_up = self.attn_up1(x_up, context_seq)
 
-        x_up = self.up_sample(x_up) # (Batch, base_channels*2, 200)
-        # Concatenate skip connection 1
+        x_up = self.up_sample(x_up)
         x_up = torch.cat([x_up, skip1], dim=1) # (Batch, base_channels*4, 200)
-        x_up = self.up2(x_up, global_cond) # (Batch, base_channels, 200)
-
-        # Final Convolution
-        out = self.final_conv(x_up) # (Batch, d_y, 200)
+        x_up = self.up2(x_up, g_cond) # (Batch, base_channels, 200)
+        x_up = self.attn_up2(x_up, context_seq)
 
         # Transpose back to standard sequence shape (Batch, Seq_len, d_y)
+        out = self.final_conv(x_up) # (Batch, d_y, 200)
         return out.transpose(1, 2)

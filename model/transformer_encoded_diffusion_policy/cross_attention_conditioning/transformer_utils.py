@@ -66,7 +66,4 @@ class TransformerTrajectoryEncoder(nn.Module):
         # Process the whole sequence simultaneously
         encoded_seq = self.transformer(x)
         
-        # Mean Pooling: Compress the time sequence into a single 256-dim context vector
-        latent = encoded_seq.mean(dim=1) 
-        
-        return latent
+        return encoded_seq
