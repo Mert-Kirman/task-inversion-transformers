@@ -17,6 +17,8 @@ import model.transformer_encoded_diffusion_policy.tedp_model as tedp_model
 import model.model_predict as model_predict
 import model.utils as utils
 
+from scipy.signal import savgol_filter
+
 # ================= CONFIGURATION =================
 run_id = "run_20260418_194212"
 save_path = f"model/transformer_encoded_diffusion_policy/save/{run_id}"
@@ -535,7 +537,7 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
         fig, axes = plt.subplots(num_to_plot, d_y2, figsize=(15, 4 * num_to_plot))
         if num_to_plot == 1: axes = np.expand_dims(axes, 0) 
 
-        num_mc_samples = 10 # Number of diffusion generations for uncertainty estimation
+        num_mc_samples = 6 # Number of diffusion generations for uncertainty estimation
 
         for row_idx, traj_idx in enumerate(indices):
             # Identify Object Type dynamically via Context ID
@@ -587,11 +589,11 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
                 
             # --- D. Denormalize Output ---
             # Denormalize means back to workspace coordinates
-            means_pred = denormalize_data(pred_mean_i_norm, Y_min_vals, Y_max_vals).cpu().numpy()
+            all_samples_pred = denormalize_data(samples_tensor, Y_min_vals, Y_max_vals).cpu().numpy()
             
-            # Standard deviation scales linearly with the range of the workspace
-            y_range = (Y_max_vals - Y_min_vals).cpu().numpy()
-            stds_pred = pred_std_i_norm.cpu().numpy() * y_range
+            # Apply Savitzky-Golay Filter to smooth the DDPM wiggles on all samples
+            # window_length=15, polyorder=3 are standard values for 200-step trajectories
+            all_samples_smoothed = savgol_filter(all_samples_pred, window_length=15, polyorder=3, axis=1)
 
             # --- E. Plotting ---
             dim_labels = ["X (Place)", "Y (Place)", "Z (Place)"]
@@ -599,21 +601,22 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
             for col_idx in range(d_y2):
                 ax = axes[row_idx, col_idx]
                 
-                # 1. Ground Truth
+                # Plot Ground Truth
                 ax.plot(time_steps, curr_y_truth_raw[:, col_idx], 
                         color='black', linestyle='-', linewidth=2, alpha=0.5, label='GT (Place)')
                 
-                # 2. Prediction
-                ax.plot(time_steps, means_pred[:, col_idx], 
-                        color='blue', linestyle='--', linewidth=2, label='Pred')
+                # Plot the "Uncertainty" Spaghetti (Background samples)
+                # We plot samples 1 through 9 with high transparency
+                for s_idx in range(1, num_mc_samples):
+                    ax.plot(time_steps, all_samples_smoothed[s_idx, :, col_idx], 
+                            color='blue', linestyle='-', linewidth=1, alpha=0.15)
                 
-                # 3. Uncertainty (Empirical Std Dev)
-                sigma = stds_pred[:, col_idx]
-                mean_curve = means_pred[:, col_idx]
-                ax.fill_between(time_steps, mean_curve - 2*sigma, mean_curve + 2*sigma, 
-                                color='blue', alpha=0.1, label='Uncertainty')
+                # Plot the Primary Representative Sample (Sample 0)
+                # This ensures we see one continuous, un-flattened trajectory
+                ax.plot(time_steps, all_samples_smoothed[0, :, col_idx], 
+                        color='blue', linestyle='--', linewidth=2, label='Pred (Primary)')
                 
-                # 4. Condition Points
+                # Condition Points
                 if mode['p'] == 2:
                     for idx in condition_points:
                         ax.scatter(time_steps[idx], curr_y_truth_raw[idx, col_idx], color='red', marker='o', s=80, label='Condition Point' if idx == condition_points[0] else "")
