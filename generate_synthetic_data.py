@@ -160,9 +160,49 @@ def plot_example_trajectories_multiple_objects():
     plt.legend()
     plt.show()
 
+def plot_reassemble_trajectories():
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+
+    data_dir = "data/paired_trajectories_insert_place"
+    objects = os.listdir(data_dir)
+    objects = objects[:5] # Limit to 5 objects for clarity
+    print(f"Plotting trajectories for objects: {objects}")
+
+    for obj in objects:
+        obj_dir = os.path.join(data_dir, obj)
+        insert_path = os.path.join(obj_dir, 'insert_all.npy')
+        place_path = os.path.join(obj_dir, 'place_all.npy')
+
+        if not os.path.exists(insert_path) or not os.path.exists(place_path):
+            print(f"Warning: Could not find matched files for {obj} in {obj_dir}. Skipping.")
+            continue
+
+        insert_trajs = np.load(insert_path, allow_pickle=True)
+        place_trajs = np.load(place_path, allow_pickle=True)
+
+        insert_trajs = [d['pose'][0][:, :3] for d in insert_trajs]
+        place_trajs = [d['pose'][0][:, :3] for d in place_trajs]
+
+        # Plot 20 samples
+        for i in range(20):
+            fwd_traj = insert_trajs[i]
+            inv_traj = place_trajs[i]
+
+            ax.plot(fwd_traj[:, 0], fwd_traj[:, 1], fwd_traj[:, 2], color='blue', alpha=0.2)
+            ax.plot(inv_traj[:, 0], inv_traj[:, 1], inv_traj[:, 2], color='orange', alpha=0.2)
+
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('Reassembled Insert-and-Place Trajectories (Forward=Blue, Inverse=Orange)')
+    plt.legend()
+    plt.show()
+
 if __name__ == "__main__":
     # plot_example_trajectories_single_object()
     # plot_example_trajectories_multiple_objects()
+    plot_reassemble_trajectories()
 
     # Generate 2,000 trajectories per object * 5 objects = 10,000 total pairs
-    generate_synthetic_dataset(base_dir="data/synthetic_trajectories", num_objects=5, paired_samples=2000)
+    # generate_synthetic_dataset(base_dir="data/synthetic_trajectories", num_objects=5, paired_samples=2000)
