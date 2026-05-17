@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+import math
 
 def cubic_bezier(p0, p1, p2, p3, num_points=200):
     """Generates a 3D trajectory using a Cubic Bezier formula."""
@@ -160,13 +161,13 @@ def plot_example_trajectories_multiple_objects():
     plt.legend()
     plt.show()
 
-def plot_reassemble_trajectories():
+def plot_reassemble_trajectories(num_objects=5):
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
 
     data_dir = "data/paired_trajectories_insert_place"
     objects = os.listdir(data_dir)
-    objects = objects[:5] # Limit to 5 objects for clarity
+    objects = objects[:num_objects] # Limit to specified number of objects for clarity
     print(f"Plotting trajectories for objects: {objects}")
 
     for obj in objects:
@@ -199,10 +200,98 @@ def plot_reassemble_trajectories():
     plt.legend()
     plt.show()
 
+def generate_reassemble_synthetic_dataset(base_dir="data/synthetic_trajectories", num_objects=5, paired_samples=2000, plot=False):
+    '''
+    Generates a synthetic dataset where all trajectories are relativized to the origin (0,0,0) (Similar to REASSEMBLE Dataset).
+    '''
+    if plot:
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+    else:
+        os.makedirs(base_dir, exist_ok=True)
+    
+    print(f"Generating Relativized Synthetic Dataset in '{base_dir}'...")
+    
+    # The standardized Pick/Drop area is the origin
+    base_hub = np.array([0.0, 0.0, 0.0])
+
+    for obj_id in range(num_objects):
+        obj_name = f"synthetic_obj_{obj_id}"
+        if not plot:
+            obj_dir = os.path.join(base_dir, obj_name)
+            os.makedirs(obj_dir, exist_ok=True)
+            
+            insert_data = []
+            place_data = []
+        
+        # Differentiator: The "Insertion Wiggle Signature" at the Spoke
+        # Unpaired Object 4 will have a unique wiggle frequency the model must guess
+        wiggle_freq = 10 + (obj_id * 15)  
+        wiggle_amp = 0.005 + (obj_id * 0.002) 
+
+        for _ in range(paired_samples):
+            # Generate Spoke (Insertion Point)
+            angle = np.random.uniform(0, 2 * math.pi)
+            radius = np.random.uniform(0.1, 0.6)
+            spoke_z_jitter = np.random.uniform(-0.03, 0.03) # Board height variances
+            pt_spoke = np.array([radius * math.cos(angle), radius * math.sin(angle), spoke_z_jitter])
+            
+            # Hub (Origin) has slight jitter because pick-up isn't always microscopically perfect
+            pt_hub_pick = base_hub + np.array([np.random.uniform(-0.01, 0.01), np.random.uniform(-0.01, 0.01), 0])
+            pt_hub_drop = base_hub + np.array([np.random.uniform(-0.01, 0.01), np.random.uniform(-0.01, 0.01), 0])
+
+            # Hungarian Matching Gap at the Insertion Point (Spoke)
+            # The forward trajectory ends slightly misaligned inside the hole. The inverse starts perfectly aligned.
+            spoke_gap = np.array([np.random.uniform(-0.01, 0.01), np.random.uniform(-0.01, 0.01), np.random.uniform(0.01, 0.05)])
+            pt_spoke_fwd_end = pt_spoke + spoke_gap
+            pt_spoke_inv_start = pt_spoke
+
+            # Asymmetric Trajectories
+            # Forward (Pick -> Insert): Arcs over, approaches Spoke
+            fwd_p1 = pt_hub_pick + np.array([0, 0, 0.15]) 
+            fwd_p2 = pt_spoke_fwd_end + np.array([0, 0, 0.15])
+            fwd_traj = cubic_bezier(pt_hub_pick, fwd_p1, fwd_p2, pt_spoke_fwd_end, 200)
+            
+            # Inverse (Extract -> Drop): Pulls straight up from Spoke to clear the hole, arcs back to Hub
+            inv_p1 = pt_spoke_inv_start + np.array([0, 0, 0.20]) # Pulls up higher/steeper
+            inv_p2 = pt_hub_drop + np.array([0, 0, 0.15])
+            inv_traj = cubic_bezier(pt_spoke_inv_start, inv_p1, inv_p2, pt_hub_drop, 200)
+
+            # INJECT INSERTION WIGGLES (Last 20% of Forward Trajectory, approaching Spoke)
+            t = np.linspace(0, 1, 200)[:, np.newaxis]
+            fwd_wiggle_mask = np.where(t > 0.8, (t - 0.8) * 5, 0)
+            fwd_traj[:, 0] += (np.sin(t * wiggle_freq) * wiggle_amp * fwd_wiggle_mask).squeeze()
+            fwd_traj[:, 1] += (np.cos(t * wiggle_freq * 1.2) * wiggle_amp * fwd_wiggle_mask).squeeze()
+            
+            # Inverse extraction wiggles (First 10% of Inverse Trajectory, pulling out of Spoke)
+            inv_wiggle_mask = np.where(t < 0.1, (0.1 - t) * 10, 0)
+            inv_traj[:, 0] += (np.sin(t * wiggle_freq) * wiggle_amp * inv_wiggle_mask).squeeze()
+            inv_traj[:, 1] += (np.cos(t * wiggle_freq * 1.2) * wiggle_amp * inv_wiggle_mask).squeeze()
+
+            if plot:
+                ax.plot(fwd_traj[:, 0], fwd_traj[:, 1], fwd_traj[:, 2], color='blue', alpha=0.2)
+                ax.plot(inv_traj[:, 0], inv_traj[:, 1], inv_traj[:, 2], color='orange', alpha=0.2)
+            else:
+                insert_data.append({'pose': [fwd_traj]})
+                place_data.append({'pose': [inv_traj]})
+            
+        if not plot:
+            np.save(os.path.join(obj_dir, 'insert_all.npy'), insert_data)
+            np.save(os.path.join(obj_dir, 'place_all.npy'), place_data)
+        print(f"  Generated {paired_samples} for {obj_name}. Wiggle Freq: {wiggle_freq}.")
+
+    if plot:
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        ax.set_title('Relativized Synthetic Trajectories (Forward=Blue, Inverse=Orange)')
+        plt.legend()
+        plt.show()
+    
+    print("\nGeneration Complete!")
+
 if __name__ == "__main__":
     # plot_example_trajectories_single_object()
     # plot_example_trajectories_multiple_objects()
-    plot_reassemble_trajectories()
-
-    # Generate 2,000 trajectories per object * 5 objects = 10,000 total pairs
-    # generate_synthetic_dataset(base_dir="data/synthetic_trajectories", num_objects=5, paired_samples=2000)
+    # plot_reassemble_trajectories(num_objects=1)
+    generate_reassemble_synthetic_dataset(num_objects=1, paired_samples=20, plot=True)
