@@ -253,7 +253,7 @@ def generate_reassemble_synthetic_dataset(base_dir="data/synthetic_trajectories"
             noisy_z_clearance = base_z_clearance + np.random.normal(0, 0.02)
             
             # 2. Flattened Arcs (Pull control points horizontally towards the middle)
-            flatten_factor = 0.35 
+            flatten_factor = 0.50 
             
             # Forward (Pick -> Insert)
             fwd_p1 = pt_hub_pick + (pt_spoke_fwd_end - pt_hub_pick) * flatten_factor + np.array([0, 0, noisy_z_clearance])
@@ -262,8 +262,8 @@ def generate_reassemble_synthetic_dataset(base_dir="data/synthetic_trajectories"
             
             # Inverse (Extract -> Drop)
             # Pull inv_p1 up slightly higher to clear the hole before flattening out
-            inv_p1 = pt_spoke_inv_start - (pt_spoke_inv_start - pt_hub_drop) * (flatten_factor * 0.5) + np.array([0, 0, noisy_z_clearance - 0.06])
-            inv_p2 = pt_hub_drop + (pt_spoke_inv_start - pt_hub_drop) * flatten_factor + np.array([0, 0, noisy_z_clearance])
+            inv_p1 = pt_spoke_inv_start - (pt_spoke_inv_start - pt_hub_drop) * (flatten_factor * 0.5) + np.array([0, 0, noisy_z_clearance - 0.04])
+            inv_p2 = pt_hub_drop + (pt_spoke_inv_start - pt_hub_drop) * flatten_factor + np.array([0, 0, noisy_z_clearance - 0.02])
             inv_traj = cubic_bezier(pt_spoke_inv_start, inv_p1, inv_p2, pt_hub_drop, 200)
 
             # 3. Mid-Flight XY Wandering
@@ -319,5 +319,5 @@ def generate_reassemble_synthetic_dataset(base_dir="data/synthetic_trajectories"
 if __name__ == "__main__":
     # plot_example_trajectories_single_object()
     # plot_example_trajectories_multiple_objects()
-    # plot_reassemble_trajectories(num_objects=5)
-    generate_reassemble_synthetic_dataset(num_objects=5, paired_samples=20, plot=True)
+    # plot_reassemble_trajectories(num_objects=1)
+    generate_reassemble_synthetic_dataset(num_objects=1, paired_samples=20, plot=True)
