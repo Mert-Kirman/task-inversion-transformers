@@ -316,8 +316,82 @@ def generate_reassemble_synthetic_dataset(base_dir="data/synthetic_trajectories"
     
     print("\nGeneration Complete!")
 
+def analyze_reassemble_dataset(data_dir="data/paired_trajectories_insert_place"):
+    print(f"--- Analyzing REASSEMBLE Dataset at {data_dir} ---")
+    
+    objects = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
+    
+    global_stats = {
+        'fwd_z_apex': [], 'inv_z_apex': [],
+        'spoke_radius': [],
+        'spoke_gap_euclidean': [],
+        'fwd_wander_xy': [], 'inv_wander_xy': []
+    }
+
+    for obj in objects:
+        obj_dir = os.path.join(data_dir, obj)
+        insert_path = os.path.join(obj_dir, 'insert_all.npy')
+        place_path = os.path.join(obj_dir, 'place_all.npy')
+
+        if not os.path.exists(insert_path) or not os.path.exists(place_path):
+            continue
+
+        # Load data
+        insert_data = np.load(insert_path, allow_pickle=True)
+        place_data = np.load(place_path, allow_pickle=True)
+        
+        insert_trajs = [d['pose'][0][:, :3] for d in insert_data]
+        place_trajs = [d['pose'][0][:, :3] for d in place_data]
+
+        for fwd, inv in zip(insert_trajs, place_trajs):
+            # 1. Z-Apex (Max height of the arc)
+            global_stats['fwd_z_apex'].append(np.max(fwd[:, 2]))
+            global_stats['inv_z_apex'].append(np.max(inv[:, 2]))
+            
+            # 2. Spoke Radius (XY distance from origin at the insertion point)
+            # Fwd ends at the spoke, Inv starts at the spoke
+            spoke_fwd = fwd[-1, :2] 
+            radius = np.linalg.norm(spoke_fwd)
+            global_stats['spoke_radius'].append(radius)
+            
+            # 3. Hungarian Matching Gap at the Spoke
+            gap = np.linalg.norm(fwd[-1] - inv[0])
+            global_stats['spoke_gap_euclidean'].append(gap)
+            
+            # 4. Mid-Flight XY Wander (Max deviation from a straight line)
+            def calc_max_wander(traj):
+                start, end = traj[0, :2], traj[-1, :2]
+                line_vec = end - start
+                line_len = np.linalg.norm(line_vec)
+                if line_len < 1e-5: return 0.0
+                line_unit = line_vec / line_len
+                
+                # Vector rejection to find perpendicular distance
+                vecs = traj[:, :2] - start
+                projs = np.dot(vecs, line_unit)[:, np.newaxis] * line_unit
+                rejects = vecs - projs
+                return np.max(np.linalg.norm(rejects, axis=1))
+
+            global_stats['fwd_wander_xy'].append(calc_max_wander(fwd))
+            global_stats['inv_wander_xy'].append(calc_max_wander(inv))
+
+    # Print Summary
+    print("\n=== GLOBAL DATASET STATISTICS ===")
+    print(f"Total Paired Trajectories Analyzed: {len(global_stats['fwd_z_apex'])}")
+    
+    def print_stat(name, array):
+        print(f"{name:<25}: Min = {np.min(array):.4f}, Max = {np.max(array):.4f}, Mean = {np.mean(array):.4f}, Std = {np.std(array):.4f}")
+
+    print_stat("Fwd Z-Apex (Clearance)", global_stats['fwd_z_apex'])
+    print_stat("Inv Z-Apex (Clearance)", global_stats['inv_z_apex'])
+    print_stat("Spoke Radius (XY Spread)", global_stats['spoke_radius'])
+    print_stat("Hungarian Spoke Gap", global_stats['spoke_gap_euclidean'])
+    print_stat("Fwd Mid-Flight Wander", global_stats['fwd_wander_xy'])
+    print_stat("Inv Mid-Flight Wander", global_stats['inv_wander_xy'])
+
 if __name__ == "__main__":
     # plot_example_trajectories_single_object()
     # plot_example_trajectories_multiple_objects()
     # plot_reassemble_trajectories(num_objects=1)
-    generate_reassemble_synthetic_dataset(num_objects=1, paired_samples=20, plot=True)
+    # generate_reassemble_synthetic_dataset(num_objects=1, paired_samples=20, plot=True)
+    analyze_reassemble_dataset()
