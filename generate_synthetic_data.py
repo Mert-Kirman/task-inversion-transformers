@@ -225,7 +225,6 @@ def generate_reassemble_synthetic_dataset(base_dir="data/synthetic_trajectories"
             place_data = []
         
         # Differentiator: The "Insertion Wiggle Signature" at the Spoke
-        # Unpaired Object 4 will have a unique wiggle frequency the model must guess
         wiggle_freq = 10 + (obj_id * 15)  
         wiggle_amp = 0.005 + (obj_id * 0.002) 
 
@@ -233,32 +232,59 @@ def generate_reassemble_synthetic_dataset(base_dir="data/synthetic_trajectories"
             # Generate Spoke (Insertion Point)
             angle = np.random.uniform(0, 2 * math.pi)
             radius = np.random.uniform(0.1, 0.6)
-            spoke_z_jitter = np.random.uniform(-0.03, 0.03) # Board height variances
+            spoke_z_jitter = np.random.uniform(-0.03, 0.03) 
             pt_spoke = np.array([radius * math.cos(angle), radius * math.sin(angle), spoke_z_jitter])
             
-            # Hub (Origin) has slight jitter because pick-up isn't always microscopically perfect
+            # Hub (Origin) has slight jitter
             pt_hub_pick = base_hub + np.array([np.random.uniform(-0.01, 0.01), np.random.uniform(-0.01, 0.01), 0])
             pt_hub_drop = base_hub + np.array([np.random.uniform(-0.01, 0.01), np.random.uniform(-0.01, 0.01), 0])
 
-            # Hungarian Matching Gap at the Insertion Point (Spoke)
-            # The forward trajectory ends slightly misaligned inside the hole. The inverse starts perfectly aligned.
+            # Hungarian Matching Gap
             spoke_gap = np.array([np.random.uniform(-0.01, 0.01), np.random.uniform(-0.01, 0.01), np.random.uniform(0.01, 0.05)])
             pt_spoke_fwd_end = pt_spoke 
             pt_spoke_inv_start = pt_spoke + spoke_gap
 
-            # Asymmetric Trajectories
-            # Forward (Pick -> Insert): Arcs over, approaches Spoke
-            fwd_p1 = pt_hub_pick + np.array([0, 0, 0.15]) 
-            fwd_p2 = pt_spoke_fwd_end + np.array([0, 0, 0.15])
+            # ==========================================
+            # MESSY REALITY INJECTIONS
+            # ==========================================
+            
+            # 1. Blurry Z-Shells (Vary the arc height for every trajectory)
+            base_z_clearance = 0.15
+            noisy_z_clearance = base_z_clearance + np.random.normal(0, 0.02)
+            
+            # 2. Flattened Arcs (Pull control points horizontally towards the middle)
+            flatten_factor = 0.35 
+            
+            # Forward (Pick -> Insert)
+            fwd_p1 = pt_hub_pick + (pt_spoke_fwd_end - pt_hub_pick) * flatten_factor + np.array([0, 0, noisy_z_clearance])
+            fwd_p2 = pt_spoke_fwd_end - (pt_spoke_fwd_end - pt_hub_pick) * flatten_factor + np.array([0, 0, noisy_z_clearance])
             fwd_traj = cubic_bezier(pt_hub_pick, fwd_p1, fwd_p2, pt_spoke_fwd_end, 200)
             
-            # Inverse (Extract -> Drop): Pulls straight up from Spoke to clear the hole, arcs back to Hub
-            inv_p1 = pt_spoke_inv_start + np.array([0, 0, 0.10])
-            inv_p2 = pt_hub_drop + np.array([0, 0, 0.15])
+            # Inverse (Extract -> Drop)
+            # Pull inv_p1 up slightly higher to clear the hole before flattening out
+            inv_p1 = pt_spoke_inv_start - (pt_spoke_inv_start - pt_hub_drop) * (flatten_factor * 0.5) + np.array([0, 0, noisy_z_clearance - 0.06])
+            inv_p2 = pt_hub_drop + (pt_spoke_inv_start - pt_hub_drop) * flatten_factor + np.array([0, 0, noisy_z_clearance])
             inv_traj = cubic_bezier(pt_spoke_inv_start, inv_p1, inv_p2, pt_hub_drop, 200)
 
-            # INJECT INSERTION WIGGLES (Last 20% of Forward Trajectory, approaching Spoke)
+            # 3. Mid-Flight XY Wandering
             t = np.linspace(0, 1, 200)[:, np.newaxis]
+            wander_mask = np.sin(t * math.pi) # Sine wave peaks at t=0.5
+            
+            wander_x = np.random.uniform(-0.04, 0.04)
+            wander_y = np.random.uniform(-0.04, 0.04)
+            
+            fwd_traj[:, 0] += (wander_mask * wander_x).squeeze()
+            fwd_traj[:, 1] += (wander_mask * wander_y).squeeze()
+            
+            # Wander back in a slightly different path
+            inv_traj[:, 0] += (wander_mask * -wander_x * 0.8).squeeze()
+            inv_traj[:, 1] += (wander_mask * -wander_y * 0.8).squeeze()
+
+            # ==========================================
+            # END MESSY REALITY INJECTIONS
+            # ==========================================
+
+            # INJECT INSERTION WIGGLES (Last 20% of Forward Trajectory, approaching Spoke)
             fwd_wiggle_mask = np.where(t > 0.8, (t - 0.8) * 5, 0)
             fwd_traj[:, 0] += (np.sin(t * wiggle_freq) * wiggle_amp * fwd_wiggle_mask).squeeze()
             fwd_traj[:, 1] += (np.cos(t * wiggle_freq * 1.2) * wiggle_amp * fwd_wiggle_mask).squeeze()
