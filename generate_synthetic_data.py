@@ -243,8 +243,8 @@ def generate_reassemble_synthetic_dataset(base_dir="data/synthetic_trajectories"
             # Hungarian Matching Gap at the Insertion Point (Spoke)
             # The forward trajectory ends slightly misaligned inside the hole. The inverse starts perfectly aligned.
             spoke_gap = np.array([np.random.uniform(-0.01, 0.01), np.random.uniform(-0.01, 0.01), np.random.uniform(0.01, 0.05)])
-            pt_spoke_fwd_end = pt_spoke + spoke_gap
-            pt_spoke_inv_start = pt_spoke
+            pt_spoke_fwd_end = pt_spoke 
+            pt_spoke_inv_start = pt_spoke + spoke_gap
 
             # Asymmetric Trajectories
             # Forward (Pick -> Insert): Arcs over, approaches Spoke
@@ -253,7 +253,7 @@ def generate_reassemble_synthetic_dataset(base_dir="data/synthetic_trajectories"
             fwd_traj = cubic_bezier(pt_hub_pick, fwd_p1, fwd_p2, pt_spoke_fwd_end, 200)
             
             # Inverse (Extract -> Drop): Pulls straight up from Spoke to clear the hole, arcs back to Hub
-            inv_p1 = pt_spoke_inv_start + np.array([0, 0, 0.20]) # Pulls up higher/steeper
+            inv_p1 = pt_spoke_inv_start + np.array([0, 0, 0.10])
             inv_p2 = pt_hub_drop + np.array([0, 0, 0.15])
             inv_traj = cubic_bezier(pt_spoke_inv_start, inv_p1, inv_p2, pt_hub_drop, 200)
 
@@ -293,5 +293,5 @@ def generate_reassemble_synthetic_dataset(base_dir="data/synthetic_trajectories"
 if __name__ == "__main__":
     # plot_example_trajectories_single_object()
     # plot_example_trajectories_multiple_objects()
-    # plot_reassemble_trajectories(num_objects=1)
-    generate_reassemble_synthetic_dataset(num_objects=1, paired_samples=20, plot=True)
+    # plot_reassemble_trajectories(num_objects=5)
+    generate_reassemble_synthetic_dataset(num_objects=5, paired_samples=20, plot=True)
