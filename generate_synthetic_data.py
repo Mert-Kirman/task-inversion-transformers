@@ -2,6 +2,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import math
+import model.utils as utils
 
 def cubic_bezier(p0, p1, p2, p3, num_points=200):
     """Generates a 3D trajectory using a Cubic Bezier formula."""
@@ -390,8 +391,13 @@ def analyze_reassemble_dataset(data_dir="data/paired_trajectories_insert_place")
     print_stat("Inv Mid-Flight Wander", global_stats['inv_wander_xy'])
 
 if __name__ == "__main__":
+    seed = 42
+    utils.seed_everything(seed)
+
     # plot_example_trajectories_single_object()
     # plot_example_trajectories_multiple_objects()
+    
+    # analyze_reassemble_dataset()
+
     # plot_reassemble_trajectories(num_objects=1)
-    # generate_reassemble_synthetic_dataset(num_objects=1, paired_samples=20, plot=True)
-    analyze_reassemble_dataset()
+    generate_reassemble_synthetic_dataset(num_objects=17, paired_samples=2000, plot=False, base_dir="data/synthetic_trajectories_large")
