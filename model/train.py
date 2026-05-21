@@ -537,6 +537,7 @@ if __name__ == "__main__":
         dropout_p = [0.0, 0.0]
         gradient_clip_norm = 5.0
         extra_pass_prob = 0.20
+        mask_drop_prob_max = None
         OBS_MAX = 10
         
         if args.dataset in ["reassemble", "synthetic_small"]:
@@ -647,7 +648,7 @@ if __name__ == "__main__":
             EPOCHS=EPOCHS, 
             valid_inverses=full_dataset.valid_inverses,
             demo_data=[full_dataset.X1, full_dataset.X2, full_dataset.Y1, full_dataset.Y2, full_dataset.C], 
-            OBS_MAX=OBS_MAX, 
+            obs_max=OBS_MAX, 
             d_x=full_dataset.d_x, 
             d_y1=full_dataset.d_y1, 
             d_y2=full_dataset.d_y2, 
