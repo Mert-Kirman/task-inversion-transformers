@@ -21,7 +21,7 @@ from model.utils import seed_everything
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train CNMP/TEMP/TEDP models on Reassemble/Synthetic datasets.")
-    parser.add_argument("--model", type=str, required=True, choices=["cnmp", "temp_vanilla", "temp_avg_unmasked", "tedp_vanilla", "tedp_avg_unmasked", "tedp_cross_attention"], help="Which model architecture to train.")
+    parser.add_argument("--model", type=str, required=True, choices=["cnmp", "temp_vanilla", "temp_unmasked_pooling", "tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention"], help="Which model architecture to train.")
     parser.add_argument("--dataset", type=str, required=True, choices=["reassemble", "synthetic_small", "synthetic_large"], help="Which dataset to train on.")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -510,9 +510,9 @@ if __name__ == "__main__":
 
     if args.model == "cnmp":
         save_folder = f"model/dual_cnmp_latent_alignment/save/run_{run_id}"
-    elif args.model in ["temp_vanilla", "temp_avg_unmasked"]:
+    elif args.model in ["temp_vanilla", "temp_unmasked_pooling"]:
         save_folder = f"model/transformer_encoded_movement_primitive/save/run_{run_id}"
-    elif args.model in ["tedp_vanilla", "tedp_avg_unmasked", "tedp_cross_attention"]:
+    elif args.model in ["tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention"]:
         save_folder = f"model/transformer_encoded_diffusion_policy/save/run_{run_id}"
     os.makedirs(save_folder, exist_ok=True)
 
@@ -546,7 +546,7 @@ if __name__ == "__main__":
         elif args.dataset == "synthetic_large":
             BATCH_SIZE = 256
             EPOCHS = 4001
-    elif args.model in ["temp_vanilla", "temp_avg_unmasked"]:
+    elif args.model in ["temp_vanilla", "temp_unmasked_pooling"]:
         learning_rate = 1e-3
         weight_decay = 3.5e-5
         dropout_p = [0.1, 0.0]
@@ -560,7 +560,7 @@ if __name__ == "__main__":
         elif args.dataset == "synthetic_large":
             BATCH_SIZE = 128
             EPOCHS = 401
-    elif args.model in ["tedp_vanilla", "tedp_avg_unmasked", "tedp_cross_attention"]:
+    elif args.model in ["tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention"]:
         learning_rate = 1e-4
         weight_decay = 3.5e-5
         dropout_p = [0.1, 0.0]
@@ -584,12 +584,25 @@ if __name__ == "__main__":
     if args.model == "cnmp":
         from model.dual_cnmp_latent_alignment import dual_cnmp_model
         model = dual_cnmp_model.DualCNMP(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param, dropout_p=dropout_p).to(device)
-    elif args.model in ["temp_vanilla", "temp_avg_unmasked"]:
-        from model.transformer_encoded_movement_primitive import temp_model
-        model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param, dropout_p=dropout_p).to(device)
-    elif args.model in ["tedp_vanilla", "tedp_avg_unmasked", "tedp_cross_attention"]:
-        from model.transformer_encoded_diffusion_policy import tedp_model
-        model = tedp_model.TedpModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param, dropout_p=dropout_p).to(device)
+    
+    elif args.model in ["temp_vanilla", "temp_unmasked_pooling"]:
+        if args.model == "temp_vanilla":
+            from model.transformer_encoded_movement_primitive import temp_model
+            model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param, dropout_p=dropout_p).to(device)
+        elif args.model == "temp_unmasked_pooling":
+            from model.transformer_encoded_movement_primitive.unmasked_pooling import temp_model
+            model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param, dropout_p=dropout_p).to(device)
+        
+    elif args.model in ["tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention"]:
+        if args.model == "tedp_vanilla":
+            from model.transformer_encoded_diffusion_policy import tedp_model
+            model = tedp_model.TedpModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param, dropout_p=dropout_p).to(device)
+        elif args.model == "tedp_unmasked_pooling":
+            from model.transformer_encoded_diffusion_policy.unmasked_pooling import tedp_model
+            model = tedp_model.TedpModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param, dropout_p=dropout_p).to(device)
+        elif args.model == "tedp_cross_attention":
+            from model.transformer_encoded_diffusion_policy.cross_attention_conditioning import tedp_model
+            model = tedp_model.TedpModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param, dropout_p=dropout_p).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
@@ -664,7 +677,7 @@ if __name__ == "__main__":
             extra_pass_prob=extra_pass_prob,
             unpaired_traj=True
         )
-    elif args.model in ["temp_vanilla", "temp_avg_unmasked"]:
+    elif args.model in ["temp_vanilla", "temp_unmasked_pooling"]:
         train_temp(
             model=model, 
             optimizer=optimizer, 
@@ -683,7 +696,7 @@ if __name__ == "__main__":
             extra_pass_prob=extra_pass_prob,
             mask_drop_prob_max=mask_drop_prob_max
         )
-    elif args.model in ["tedp_vanilla", "tedp_avg_unmasked", "tedp_cross_attention"]:
+    elif args.model in ["tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention"]:
         train_tedp(
             model=model, 
             optimizer=optimizer, 
