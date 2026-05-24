@@ -164,12 +164,25 @@ class TedpModel(nn.Module):
         # Start with pure Gaussian noise X_T
         seq = torch.randn((batch_size, time_len, dim_y), device=device)
         
+        # CFG Guidance Scale (Experiment between 1.5 and 4.0. Usually 2.0 is the sweet spot)
+        w = 2.0 
+        
         # Standard DDPM Reverse Loop
         for k in reversed(range(self.num_diffusion_steps)):
             timesteps = torch.full((batch_size,), k, device=device, dtype=torch.long)
+
+            # CFG LOGIC: Double Prediction
+            # ==========================================
+            # Unconditioned prediction (pass pure zeros)
+            uncond_latent = torch.zeros_like(latent_cond)
+            noise_pred_uncond = unet(seq, timesteps, uncond_latent)
             
-            # Predict noise
-            noise_pred = unet(seq, timesteps, latent_cond)
+            # Conditioned prediction
+            noise_pred_cond = unet(seq, timesteps, latent_cond)
+            
+            # CFG Extrapolation Formula
+            noise_pred = noise_pred_uncond + w * (noise_pred_cond - noise_pred_uncond)
+            # ==========================================
             
             # DDPM Step Math
             alpha_k = (1.0 - self.scheduler.betas[k]).to(device)
