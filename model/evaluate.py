@@ -585,7 +585,7 @@ def predict_random_trajectories(save_path, full_dataset, Y2_raw, norm_stats, mod
                         # Prepare Condition
                         cond_pts = []
                         for idx in condition_points:
-                            cond_pts.append([x_full[0, idx], y2_seq[0, idx]])
+                            cond_pts.append([x_full[0, idx], y1_seq[0, idx]])
 
                         pred_mean_i_norm, pred_std_i_norm = model_predict.predict_inverse(model, time_len, curr_context, cond_pts, full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, device=device)
                     elif args.model.startswith('temp'):
@@ -612,7 +612,7 @@ def predict_random_trajectories(save_path, full_dataset, Y2_raw, norm_stats, mod
                         for idx in condition_points:
                             cond_pts.append([x_full[0, idx], y2_seq[0, idx]])
 
-                        pred_mean_i_norm, pred_std_i_norm = model_predict.predict_inverse_inverse(model, time_len, curr_context, condition_points, full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, device=device)
+                        pred_mean_i_norm, pred_std_i_norm = model_predict.predict_inverse_inverse(model, time_len, curr_context, cond_pts, full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, device=device)
                     elif args.model.startswith('temp'):
                         output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=mode['p'], mask_indices_2=eval_mask)
                         _, _, pred_mean_i_norm, pred_std_i_norm = output.chunk(4, dim=-1) # Extract the Inverse Trajectory predictions (Mean and Log-Variance)
@@ -780,4 +780,4 @@ if __name__ == "__main__":
 
     calculate_success_rates_and_plot(save_path, full_dataset, norm_stats, model, args, device=device)
     calculate_continuous_errors_and_plot(save_path, full_dataset, norm_stats, model, args, device=device)
-    predict_random_trajectories(save_path, full_dataset, Y2_raw, norm_stats, model, args, num_samples=100, device=device)
+    predict_random_trajectories(save_path, full_dataset, Y2_raw, norm_stats, model, args, num_samples=10, device=device)
