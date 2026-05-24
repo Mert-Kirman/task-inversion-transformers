@@ -23,6 +23,8 @@ def parse_args():
     parser.add_argument("--model", type=str, required=True, choices=["cnmp", "temp_vanilla", "temp_unmasked_pooling", "tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention"], help="Which model architecture to evaluate.")
     parser.add_argument("--dataset", type=str, required=True, choices=["reassemble", "synthetic_small", "synthetic_large"], help="Which dataset to evaluate conditioning on.")
     parser.add_argument("--run_id", type=str, required=True, help="Identifier for the model run to load and evaluate.")
+    parser.add_argument("--num_samples", type=int, default=10, help="Number of trajectories to sample from the test set for evaluation.")
+    parser.add_argument("--perturb_pct", type=float, default=0.10, help="Percentage to shift the conditioning points (e.g., 0.10 for 10%).")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -40,8 +42,8 @@ def denormalize_data(tensor, min_val, max_val):
     denominator = max_val - min_val
     return tensor * denominator + min_val
 
-def condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, model, args, num_samples=10, device='cpu'):
-    print(f"\n--- RUNNING CONDITIONING PERTURBATION TEST ({num_samples} samples) ---")
+def condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, model, args, device='cpu'):
+    print(f"\n--- RUNNING CONDITIONING PERTURBATION TEST ({args.num_samples} samples) ---")
 
     Y_min_vals, Y_max_vals, C_min_val, C_max_val = norm_stats['Y_min'], norm_stats['Y_max'], norm_stats['C_min'], norm_stats['C_max']
 
@@ -57,7 +59,7 @@ def condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, mod
     test_idx = np.load(os.path.join(save_path, 'test_indices.npy'))
     test_idx_list = test_idx.tolist()
     
-    num_to_plot = min(num_samples, len(test_idx_list))
+    num_to_plot = min(args.num_samples, len(test_idx_list))
     indices = random.sample(test_idx_list, num_to_plot)
     
     time_steps = np.linspace(0, 1, time_len)
@@ -95,8 +97,8 @@ def condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, mod
 
         condition_sets = {
             "Original": {"seq": y2_seq_orig, "points": []},
-            "Shifted -10%": {"seq": y2_seq_minus, "points": []},
-            "Shifted +10%": {"seq": y2_seq_plus, "points": []}
+            f"Shifted -{int(args.perturb_pct * 100)}%": {"seq": y2_seq_minus, "points": []},
+            f"Shifted +{int(args.perturb_pct * 100)}%": {"seq": y2_seq_plus, "points": []}
         }
 
         # Apply shifts directly to the condition tensors
@@ -104,8 +106,8 @@ def condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, mod
             t_val = time_steps[t_idx]
             
             val_orig_norm = y2_seq_orig[0, t_idx, :].clone()
-            val_minus_norm = val_orig_norm - 0.10
-            val_plus_norm = val_orig_norm + 0.10
+            val_minus_norm = val_orig_norm - args.perturb_pct
+            val_plus_norm = val_orig_norm + args.perturb_pct
             
             y2_seq_minus[0, t_idx, :] = val_minus_norm
             y2_seq_plus[0, t_idx, :] = val_plus_norm
@@ -116,8 +118,8 @@ def condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, mod
             val_plus_raw = denormalize_data(val_plus_norm, Y_min_vals, Y_max_vals).cpu().numpy()
 
             condition_sets["Original"]["points"].append({"t": t_val, "raw": val_orig_raw})
-            condition_sets["Shifted -10%"]["points"].append({"t": t_val, "raw": val_minus_raw})
-            condition_sets["Shifted +10%"]["points"].append({"t": t_val, "raw": val_plus_raw})
+            condition_sets[f"Shifted -{int(args.perturb_pct * 100)}%"]["points"].append({"t": t_val, "raw": val_minus_raw})
+            condition_sets[f"Shifted +{int(args.perturb_pct * 100)}%"]["points"].append({"t": t_val, "raw": val_plus_raw})
 
         # --- Run Inference ---
         predictions = {}
@@ -150,7 +152,7 @@ def condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, mod
 
         # --- Plotting ---
         dim_labels = ["X (Place)", "Y (Place)", "Z (Place)"]
-        colors = {"Original": "blue", "Shifted -10%": "orange", "Shifted +10%": "green"}
+        colors = {"Original": "blue", f"Shifted -{int(args.perturb_pct * 100)}%": "orange", f"Shifted +{int(args.perturb_pct * 100)}%": "green"}
         
         for col_idx in range(full_dataset.d_y2):
             ax = axes[row_idx, col_idx]
@@ -185,7 +187,7 @@ def condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, mod
     plt.tight_layout()
     plt.subplots_adjust(top=0.92) 
     
-    save_file = f'{save_path}/conditioning_perturbation_{num_to_plot}.png'
+    save_file = f'{save_path}/conditioning_perturbation_{int(args.perturb_pct * 100)}_pct.png'
     plt.savefig(save_file)
     print(f"Conditioning perturbation plots saved to {save_file}")
 
@@ -261,4 +263,4 @@ if __name__ == "__main__":
     full_dataset.Y2 = normalize_data(full_dataset.Y2, Y_min_vals, Y_max_vals)
     full_dataset.C = normalize_data(full_dataset.C, C_min_val, C_max_val)
 
-    condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, model, args, num_samples=10, device=device)
+    condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, model, args, device=device)
