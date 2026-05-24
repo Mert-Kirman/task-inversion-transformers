@@ -28,14 +28,12 @@ def parse_args():
 
     return args
 
-def normalize_data(Y1, Y2, C, Y_min_vals, Y_max_vals, C_min_val, C_max_val):
-    """Normalize Y1, Y2, and C using global min-max normalization based on training data statistics."""
+def normalize_data(tensor, min_val, max_val):
+    """Normalize a tensor using global min-max normalization based on training data statistics."""
     epsilon = 1e-8
-    Y1_normalized = (Y1 - Y_min_vals) / (Y_max_vals - Y_min_vals + epsilon)
-    Y2_normalized = (Y2 - Y_min_vals) / (Y_max_vals - Y_min_vals + epsilon)
-    C_normalized = (C - C_min_val) / (C_max_val - C_min_val + epsilon)
+    tensor_normalized = (tensor - min_val) / (max_val - min_val + epsilon)
 
-    return Y1_normalized, Y2_normalized, C_normalized
+    return tensor_normalized
 
 def denormalize_data(tensor, min_val, max_val):
     """Reverts [0, 1] data back to original scale."""
@@ -52,6 +50,8 @@ def condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, mod
     # Move bounds to device for denormalization
     Y_min_vals = Y_min_vals.to(device)
     Y_max_vals = Y_max_vals.to(device)
+    C_min_val = C_min_val.to(device)
+    C_max_val = C_max_val.to(device)
 
     # Load test indices and sample from them
     test_idx = np.load(os.path.join(save_path, 'test_indices.npy'))
@@ -75,7 +75,7 @@ def condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, mod
     for row_idx, traj_idx in enumerate(indices):
         # Identify Object Type
         curr_context_norm = full_dataset.C[traj_idx]
-        raw_id = denormalize_data(curr_context_norm.to(device), C_min_val.to(device), C_max_val.to(device))[-1].item()
+        raw_id = denormalize_data(curr_context_norm.to(device), C_min_val, C_max_val)[-1].item()
         
         curr_obj_name = "Unknown"
         min_diff = float('inf')
@@ -125,7 +125,7 @@ def condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, mod
             with torch.no_grad():
                 if args.model.startswith('cnmp'):
                     # Extract just the [time, normalized_value] pair the model expects
-                    model_cond = [[c["t"], normalize_data(c["raw"], Y_min_vals, Y_max_vals)] for c in cond_data["points"]]
+                    model_cond = [[c["t"], normalize_data(torch.from_numpy(c["raw"]).to(device), Y_min_vals, Y_max_vals)] for c in cond_data["points"]]
                     
                     pred_seq, _ = model_predict.predict_inverse_inverse(model, time_len, curr_context, model_cond, full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, device=device)
                 elif args.model.startswith('temp'):
@@ -257,6 +257,8 @@ if __name__ == "__main__":
 
     # Normalize data
     Y2_raw = full_dataset.Y2.clone()    # Keep a raw copy of Y2 for plotting ground truth
-    full_dataset.Y1, full_dataset.Y2, full_dataset.C = normalize_data(full_dataset.Y1, full_dataset.Y2, full_dataset.C, Y_min_vals, Y_max_vals, C_min_val, C_max_val)
+    full_dataset.Y1 = normalize_data(full_dataset.Y1, Y_min_vals, Y_max_vals)
+    full_dataset.Y2 = normalize_data(full_dataset.Y2, Y_min_vals, Y_max_vals)
+    full_dataset.C = normalize_data(full_dataset.C, C_min_val, C_max_val)
 
     condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, model, args, num_samples=10, device=device)
