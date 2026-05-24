@@ -141,10 +141,10 @@ def condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, mod
                     
                     output, _, _, _ = model(y1_seq, cond_data["seq"], curr_context, x_full, extra_pass=False, p=2, mask_indices_2=eval_mask)
                     _, _, pred_seq, _ = output.chunk(4, dim=-1)
-                    pred_seq.squeeze(0)
+                    pred_seq = pred_seq.squeeze(0)
                 elif args.model.startswith('tedp'):
                     pred_seq = model.sample(cond_seq=cond_data["seq"], params=curr_context, mask_indices=eval_mask, source_dim='y2', target_dim='y2', time_len=time_len)
-                    pred_seq.squeeze(0)
+                    pred_seq = pred_seq.squeeze(0)
 
             # Denormalize
             pred_seq_raw = denormalize_data(pred_seq, Y_min_vals, Y_max_vals).cpu().numpy()
