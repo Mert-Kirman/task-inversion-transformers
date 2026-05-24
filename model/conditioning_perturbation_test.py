@@ -106,8 +106,13 @@ def condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, mod
             t_val = time_steps[t_idx]
             
             val_orig_norm = y2_seq_orig[0, t_idx, :].clone()
-            val_minus_norm = val_orig_norm - args.perturb_pct
-            val_plus_norm = val_orig_norm + args.perturb_pct
+
+            if t_idx == -1:
+                val_minus_norm = val_orig_norm
+                val_plus_norm = val_orig_norm
+            else:
+                val_minus_norm = val_orig_norm - args.perturb_pct
+                val_plus_norm = val_orig_norm + args.perturb_pct
             
             y2_seq_minus[0, t_idx, :] = val_minus_norm
             y2_seq_plus[0, t_idx, :] = val_plus_norm
