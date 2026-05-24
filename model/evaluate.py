@@ -600,6 +600,11 @@ def predict_random_trajectories(save_path, full_dataset, Y2_raw, norm_stats, mod
                         for _ in range(num_mc_samples):
                             pred = model.sample(cond_seq=y1_seq, params=curr_context, mask_indices=eval_mask, source_dim='y1', target_dim='y2', time_len=time_len)
                             samples.append(pred.squeeze(0))
+
+                        # Calculate Empirical Mean and Standard Deviation across the 10 samples
+                        samples_tensor = torch.stack(samples) # Shape: (10, 200, 3)
+                        pred_mean_i_norm = samples_tensor.mean(dim=0)
+                        pred_std_i_norm = samples_tensor.std(dim=0)
                 else:
                     # Condition on Inverse Trajectory
                     condition_points = [0, -1] 
@@ -780,4 +785,4 @@ if __name__ == "__main__":
 
     calculate_success_rates_and_plot(save_path, full_dataset, norm_stats, model, args, device=device)
     calculate_continuous_errors_and_plot(save_path, full_dataset, norm_stats, model, args, device=device)
-    predict_random_trajectories(save_path, full_dataset, Y2_raw, norm_stats, model, args, num_samples=10, device=device)
+    predict_random_trajectories(save_path, full_dataset, Y2_raw, norm_stats, model, args, num_samples=50, device=device)
