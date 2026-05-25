@@ -2,23 +2,46 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
+import json
+import argparse
+import sys
+from datetime import datetime
 
-def generate_comparative_plots(cnmp_csv, temp_csv, tedp_csv, output_dir="model/model_comparisons", time_point="End Point (t=1)"):
-    print(f"Generating comparative plots for {time_point}...")
+def parse_args():
+    parser = argparse.ArgumentParser(description="Compare multiple models from a JSON config file.")
+    parser.add_argument("--config", type=str, default="model/compare_config.json", help="Path to the JSON configuration file.")
+    parser.add_argument("--out", type=str, default="model/model_comparisons", help="Output directory for the plots.")
+    args = parser.parse_args()
+    
+    comparison_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    args.out = os.path.join(args.out, f"comparison_{comparison_id}")
+    return args
+
+def generate_comparative_plots(models_dict, output_dir="model/model_comparisons", time_point="End Point (t=1)", file_suffix="end"):
+    print(f"\nGenerating comparative plots for {time_point}...")
     os.makedirs(output_dir, exist_ok=True)
 
-    # Load Data
-    df_cnmp = pd.read_csv(cnmp_csv)
-    df_cnmp['Model'] = '1. Dual-CNMP (Baseline)'
+    df_list = []
+    
+    # Dynamically load all models specified in the dictionary
+    for model_name, run_dir in models_dict.items():
+        csv_path = os.path.join(run_dir, f"continuous_error_violins_{file_suffix}.csv")
+        
+        if not os.path.exists(csv_path):
+            print(f"  [WARNING] Could not find {csv_path}. Skipping '{model_name}'.")
+            continue
+            
+        print(f"  Loaded data for: {model_name}")
+        df = pd.read_csv(csv_path)
+        df['Model'] = model_name
+        df_list.append(df)
 
-    df_temp = pd.read_csv(temp_csv)
-    df_temp['Model'] = '2. TEMP (Transformer)'
-
-    df_tedp = pd.read_csv(tedp_csv)
-    df_tedp['Model'] = '3. TEDP (Diffusion)'
+    if not df_list:
+        print("No valid data found to plot. Exiting.")
+        return
 
     # Combine all data
-    df_all = pd.concat([df_cnmp, df_temp, df_tedp], ignore_index=True)
+    df_all = pd.concat(df_list, ignore_index=True)
 
     # Filter to just 3D Euclidean error for the macroscopic comparisons
     df_3d = df_all[df_all['Metric'] == 'Euclidean (3D)'].copy()
@@ -32,13 +55,18 @@ def generate_comparative_plots(cnmp_csv, temp_csv, tedp_csv, output_dir="model/m
 
     # Styling
     sns.set_theme(style="whitegrid")
-    # Professional colors: Red (Baseline), Blue (TEMP), Green (TEDP)
-    palette = ["#d9534f", "#5bc0de", "#5cb85c"] 
+    
+    # Dynamic Palette Generation based on the number of models
+    num_models = len(df_list)
+    if num_models <= 10:
+        palette = sns.color_palette("tab10", num_models) # Good distinct colors for <= 10 models
+    else:
+        palette = sns.color_palette("husl", num_models)  # Smooth gradient for > 10 models
 
     # ==========================================
     # Aggregated Violin Plots (All Objects Combined)
     # ==========================================
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(max(8, num_models * 2), 6)) # Dynamically widen plot if many models
     sns.violinplot(
         data=df_3d,
         x='Model',
@@ -53,12 +81,14 @@ def generate_comparative_plots(cnmp_csv, temp_csv, tedp_csv, output_dir="model/m
     plt.title(f'Overall Model Performance Distribution\n{time_point}', fontsize=16, fontweight='bold')
     plt.ylabel('Euclidean Error (cm)', fontsize=14, fontweight='bold')
     plt.xlabel('')
+    if num_models > 4:
+        plt.xticks(rotation=15, ha='right') # Rotate x-labels if there are many models
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'1_overall_violin_comparison_{time_point[-4:-1]}.png'), dpi=300)
+    plt.savefig(os.path.join(output_dir, f'1_overall_violin_comparison_{file_suffix}.png'), dpi=300)
     plt.close()
 
     # ==========================================
-    # Grouped Box Plot (17 Objects x 3 Models)
+    # Grouped Box Plot (17 Objects x N Models)
     # ==========================================
     plt.figure(figsize=(20, 8))
     sns.boxplot(
@@ -68,7 +98,7 @@ def generate_comparative_plots(cnmp_csv, temp_csv, tedp_csv, output_dir="model/m
         hue='Model',
         order=order,
         palette=palette,
-        showfliers=True, # Shows the outlier dots
+        showfliers=True,
         linewidth=1.2
     )
     plt.title(f'Object-by-Object Error Distribution (Sorted)\n{time_point}', fontsize=18, fontweight='bold')
@@ -77,7 +107,7 @@ def generate_comparative_plots(cnmp_csv, temp_csv, tedp_csv, output_dir="model/m
     plt.xticks(rotation=45, ha='right', fontsize=12, fontweight='bold')
     plt.legend(title='Model architecture', fontsize=12, title_fontsize=12)
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'2_grouped_boxplot_comparison_{time_point[-4:-1]}.png'), dpi=300)
+    plt.savefig(os.path.join(output_dir, f'2_grouped_boxplot_comparison_{file_suffix}.png'), dpi=300)
     plt.close()
 
     # ==========================================
@@ -91,7 +121,7 @@ def generate_comparative_plots(cnmp_csv, temp_csv, tedp_csv, output_dir="model/m
         hue='Model',
         order=order,
         palette=palette,
-        errorbar=None, # Removes the variance lines to just show the clean mean bars
+        errorbar=None, 
         edgecolor='black'
     )
     plt.title(f'Object-by-Object Mean Error (Sorted)\n{time_point}', fontsize=18, fontweight='bold')
@@ -100,20 +130,35 @@ def generate_comparative_plots(cnmp_csv, temp_csv, tedp_csv, output_dir="model/m
     plt.xticks(rotation=45, ha='right', fontsize=12, fontweight='bold')
     plt.legend(title='Model architecture', fontsize=12, title_fontsize=12)
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'3_grouped_barplot_comparison_{time_point[-4:-1]}.png'), dpi=300)
+    plt.savefig(os.path.join(output_dir, f'3_grouped_barplot_comparison_{file_suffix}.png'), dpi=300)
     plt.close()
 
-    print(f"Comparative plots saved to '{output_dir}'")
-
 if __name__ == '__main__':
-    cnmp_csv_path = "model/dual_cnmp_latent_alignment/save/run_20260408_235825/continuous_error_violins_start.csv"
-    temp_csv_path = "model/transformer_encoded_movement_primitive/save/run_20260408_204033/continuous_error_violins_start.csv"
-    tedp_csv_path = "model/transformer_encoded_diffusion_policy/save/run_20260418_194212/continuous_error_violins_start.csv" 
+    args = parse_args()
+    if not os.path.exists(args.config):
+        print(f"Error: Configuration file '{args.config}' not found.")
+        print("Please create a JSON file mapping model display names to their run directories.")
+        sys.exit(1)
 
-    generate_comparative_plots(cnmp_csv_path, temp_csv_path, tedp_csv_path, time_point="Start Point (t=0)")
+    with open(args.config, 'r') as f:
+        models_dict = json.load(f)
 
-    cnmp_csv_path = "model/dual_cnmp_latent_alignment/save/run_20260408_235825/continuous_error_violins_end.csv"
-    temp_csv_path = "model/transformer_encoded_movement_primitive/save/run_20260408_204033/continuous_error_violins_end.csv"
-    tedp_csv_path = "model/transformer_encoded_diffusion_policy/save/run_20260418_194212/continuous_error_violins_end.csv" 
+    print(f"Loaded configuration with {len(models_dict)} models.")
 
-    generate_comparative_plots(cnmp_csv_path, temp_csv_path, tedp_csv_path, time_point="End Point (t=1)")
+    # Generate plots for Start Point (t=0)
+    generate_comparative_plots(
+        models_dict=models_dict, 
+        output_dir=args.out, 
+        time_point="Start Point (t=0)", 
+        file_suffix="start"
+    )
+
+    # Generate plots for End Point (t=1)
+    generate_comparative_plots(
+        models_dict=models_dict, 
+        output_dir=args.out, 
+        time_point="End Point (t=1)", 
+        file_suffix="end"
+    )
+    
+    print(f"\nAll comparative plots saved successfully to '{args.out}'.")
