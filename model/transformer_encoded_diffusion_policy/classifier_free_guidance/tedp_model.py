@@ -100,9 +100,6 @@ class TedpModel(nn.Module):
         elif p == 2:
             latent = L_I # Inference: Conditioned on Inverse
 
-        # Late Fusion (Combine Latent + Task Parameters)
-        latent_cond = torch.cat([latent, p_embedded], dim=-1) # Shape: (batch, 272)
-
         # Classifier-Free Guidance logic: 10% chance to drop conditioning during training, forcing the model to learn to denoise without it.
         # ==========================================
         if self.training:
@@ -110,9 +107,12 @@ class TedpModel(nn.Module):
             # Create a mask of shape (batch, 1). 1.0 means drop, 0.0 means keep.
             drop_mask = (torch.rand(batch_size, 1, device=device) < p_uncond).float()
             
-            # If drop_mask is 1.0, latent_cond becomes entirely zeros
-            latent_cond = latent_cond * (1.0 - drop_mask)
+            # ONLY zero out the spatial latent vector
+            latent = latent * (1.0 - drop_mask)
         # ==========================================
+            
+        # Late Fusion: Combine (potentially dropped) Latent + (ALWAYS KEPT) Task Params
+        latent_cond = torch.cat([latent, p_embedded], dim=-1)
 
         # Diffusion Noise Process
         timesteps = torch.randint(0, self.num_diffusion_steps, (batch_size,), device=device).long()
@@ -157,7 +157,10 @@ class TedpModel(nn.Module):
         L_cond = encoder(cond_seq, mask_indices)
         
         latent_cond = torch.cat([L_cond, p_embedded], dim=-1)
-        
+
+        # Unconditioned context (Zeros + Task) -> ONLY drop the Latent!
+        uncond_latent = torch.cat([torch.zeros_like(L_cond), p_embedded], dim=-1)
+
         unet = self.unet2 if target_dim == 'y2' else self.unet1
         dim_y = self.d_y2 if target_dim == 'y2' else self.d_y1
         
@@ -170,14 +173,13 @@ class TedpModel(nn.Module):
         # Standard DDPM Reverse Loop
         for k in reversed(range(self.num_diffusion_steps)):
             timesteps = torch.full((batch_size,), k, device=device, dtype=torch.long)
-
+            
             # CFG LOGIC: Double Prediction
             # ==========================================
-            # Unconditioned prediction (pass pure zeros)
-            uncond_latent = torch.zeros_like(latent_cond)
+            # Unconditioned prediction (Zeros + Task Param)
             noise_pred_uncond = unet(seq, timesteps, uncond_latent)
             
-            # Conditioned prediction
+            # Conditioned prediction (Latent + Task Param)
             noise_pred_cond = unet(seq, timesteps, latent_cond)
             
             # CFG Extrapolation Formula
