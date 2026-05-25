@@ -148,7 +148,7 @@ def train_cnmp(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, o
                 tqdm.write(f"Saved model epoch {epoch}, Train loss: {loss.item():6f}, Validation error: {epoch_val_error:6f}")
                 torch.save(model.state_dict(), f'{save_folder}/best_model.pth')
 
-def train_temp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_reconstruction_loader, val_loader, d_y1, d_y2, d_param, save_folder, device, norm_stats, gradient_clip_norm, extra_pass_prob, mask_drop_prob_max):
+def train_temp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_reconstruction_loader, val_loader, d_y1, d_y2, d_param, save_folder, device, norm_stats, gradient_clip_norm, extra_pass_prob, obs_max):
     sys.stdout = Logger(os.path.join(save_folder, 'train_log.txt'))
 
     composite_loss_list = []
@@ -198,17 +198,23 @@ def train_temp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, trai
 
             batch_size = y1_seq.shape[0]
             time_len = y1_seq.shape[1]
-            
-            mask1 = None
-            mask2 = None
 
-            # Choose a random drop probability for THIS specific batch
-            # This ensures the model learns to handle full sequences AND sparse points.
-            drop_prob = torch.rand(1).item() * mask_drop_prob_max
+            # Randomly decide how many observation points to keep (between 1 and obs_max)
+            num_obs_f = torch.randint(1, obs_max + 1, (1,)).item()
+            num_obs_i = torch.randint(1, obs_max + 1, (1,)).item()
             
-            # Create boolean masks (True means replace with [MASK] token)
-            mask1 = torch.rand(batch_size, time_len, device=device) < drop_prob
-            mask2 = torch.rand(batch_size, time_len, device=device) < drop_prob
+            # Start with EVERYTHING masked (True means [MASK])
+            mask1 = torch.ones(batch_size, time_len, dtype=torch.bool, device=device)
+            mask2 = torch.ones(batch_size, time_len, dtype=torch.bool, device=device)
+            
+            # For each item in the batch, randomly unmask 'num_obs' points
+            for b in range(batch_size):
+                # Pick random distinct indices to unmask (False means observe)
+                obs_idx1 = torch.randperm(time_len, device=device)[:num_obs_f]
+                obs_idx2 = torch.randperm(time_len, device=device)[:num_obs_i]
+                
+                mask1[b, obs_idx1] = False
+                mask2[b, obs_idx2] = False
             
             # Forward pass
             output, L_F, L_I, extra_pass = model(y1_seq, y2_seq, params, x_tar, extra_pass, mask_indices_1=mask1, mask_indices_2=mask2)
@@ -250,8 +256,19 @@ def train_temp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, trai
                     batch_size = y1_seq.shape[0]
                     time_len = y1_seq.shape[1]
                     x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1).repeat(batch_size, 1, 1)
+
+                    num_obs_f = torch.randint(1, obs_max + 1, (1,)).item()
+                    num_obs_i = torch.randint(1, obs_max + 1, (1,)).item()
+                    
+                    mask1 = torch.ones(batch_size, time_len, dtype=torch.bool, device=device)
+                    mask2 = torch.ones(batch_size, time_len, dtype=torch.bool, device=device)
+                    for b in range(batch_size):
+                        obs_idx_f = torch.randperm(time_len, device=device)[:num_obs_f]
+                        obs_idx_i = torch.randperm(time_len, device=device)[:num_obs_i]
+                        mask1[b, obs_idx_f] = False
+                        mask2[b, obs_idx_i] = False
                 
-                    output, _, _, _ = model(y1_seq, y2_seq, params, x_full, extra_pass=False, p=1) # p=1 forces L_F
+                    output, _, _, _ = model(y1_seq, y2_seq, params, x_full, extra_pass=False, p=1, mask_indices_1=mask1, mask_indices_2=mask2) # p=1 forces L_F
                     pred_mean_f, _, pred_mean_i, _ = output.chunk(4, dim=-1)
                     
                     # Compare full prediction against full ground truth sequences
@@ -264,14 +281,22 @@ def train_temp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, trai
                     y2_seq = val_batch['y2_seq'].to(device)
                     params = val_batch['context'].unsqueeze(1).to(device)
 
-                    # Generate all time points for the full trajectory
                     batch_size = y1_seq.shape[0]
                     time_len = y1_seq.shape[1]
                     x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1).repeat(batch_size, 1, 1)
                     
-                    # Validation is always evaluated on Task Inversion (extra_pass = False)
-                    # so we test its actual primary objective.
-                    output, _, _, _ = model(y1_seq, y2_seq, params, x_full, extra_pass=False, p=1) # p=1 means we condition on forward trajectory for inference (forces L_F to be used in decoding)
+                    num_obs_f = torch.randint(1, obs_max + 1, (1,)).item()
+                    num_obs_i = torch.randint(1, obs_max + 1, (1,)).item()
+                    
+                    mask1 = torch.ones(batch_size, time_len, dtype=torch.bool, device=device)
+                    mask2 = torch.ones(batch_size, time_len, dtype=torch.bool, device=device)
+                    for b in range(batch_size):
+                        obs_idx_f = torch.randperm(time_len, device=device)[:num_obs_f]
+                        obs_idx_i = torch.randperm(time_len, device=device)[:num_obs_i]
+                        mask1[b, obs_idx_f] = False
+                        mask2[b, obs_idx_i] = False
+
+                    output, _, _, _ = model(y1_seq, y2_seq, params, x_full, extra_pass=False, p=1, mask_indices_1=mask1, mask_indices_2=mask2) # p=1 means we condition on forward trajectory for inference (forces L_F to be used in decoding)
                     pred_mean_f, _, pred_mean_i, _ = output.chunk(4, dim=-1)
                     
                     # Compare full prediction against full ground truth sequences
@@ -314,7 +339,7 @@ def train_temp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, trai
                 }
                 torch.save(checkpoint, os.path.join(save_folder, 'best_model.pth'))
 
-def train_tedp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_reconstruction_loader, val_loader, d_y1, d_y2, d_param, save_folder, device, norm_stats, gradient_clip_norm, extra_pass_prob, mask_drop_prob_max):
+def train_tedp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_reconstruction_loader, val_loader, d_y1, d_y2, d_param, save_folder, device, norm_stats, gradient_clip_norm, extra_pass_prob, obs_max):
     sys.stdout = Logger(os.path.join(save_folder, 'train_log.txt'))
 
     composite_loss_list = []
@@ -362,13 +387,16 @@ def train_tedp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, trai
             batch_size = y1_seq.shape[0]
             time_len = y1_seq.shape[1]
 
-            # Choose a random drop probability for THIS specific batch
-            # This ensures the model learns to handle full sequences AND sparse points.
-            drop_prob = torch.rand(1).item() * mask_drop_prob_max
+            num_obs_f = torch.randint(1, obs_max + 1, (1,)).item()
+            num_obs_i = torch.randint(1, obs_max + 1, (1,)).item()
             
-            # Create boolean masks for the BERT encoders (True means replace with [MASK] token)
-            mask1 = torch.rand(batch_size, time_len, device=device) < drop_prob
-            mask2 = torch.rand(batch_size, time_len, device=device) < drop_prob
+            mask1 = torch.ones(batch_size, time_len, dtype=torch.bool, device=device)
+            mask2 = torch.ones(batch_size, time_len, dtype=torch.bool, device=device)
+            for b in range(batch_size):
+                obs_idx1 = torch.randperm(time_len, device=device)[:num_obs_f]
+                obs_idx2 = torch.randperm(time_len, device=device)[:num_obs_i]
+                mask1[b, obs_idx1] = False
+                mask2[b, obs_idx2] = False
             
             # Forward pass: Adds noise and returns the U-Net's noise prediction
             noise_pred, noise_truth, L_F, L_I, extra_pass = model(y1_seq, y2_seq, params, extra_pass, mask_indices_1=mask1, mask_indices_2=mask2)
@@ -406,10 +434,18 @@ def train_tedp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, trai
                     y2_seq = train_batch['y2_seq'].to(device)
                     params = train_batch['context'].unsqueeze(1).to(device)
                     time_len = y1_seq.shape[1]
-                
+                    batch_size = y1_seq.shape[0]
+                    
+                    # Generate the Mask
+                    num_obs = torch.randint(1, obs_max + 1, (1,)).item()
+                    val_mask = torch.ones(batch_size, time_len, dtype=torch.bool, device=device)
+                    for b in range(batch_size):
+                        obs_idx = torch.randperm(time_len, device=device)[:num_obs]
+                        val_mask[b, obs_idx] = False
+
                     # Use Diffusion Sampling to iteratively build the trajectories
-                    pred_fwd = model.sample(y1_seq, params, target_dim='y1', time_len=time_len)
-                    pred_inv = model.sample(y1_seq, params, target_dim='y2', time_len=time_len)
+                    pred_fwd = model.sample(y1_seq, params, mask_indices=val_mask, target_dim='y1', time_len=time_len)
+                    pred_inv = model.sample(y1_seq, params, mask_indices=val_mask, target_dim='y2', time_len=time_len)
                     
                     epoch_train_fwd_mse += torch.nn.functional.mse_loss(pred_fwd, y1_seq).item()
                     epoch_train_inv_mse += torch.nn.functional.mse_loss(pred_inv, y2_seq).item()
@@ -420,10 +456,18 @@ def train_tedp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, trai
                     y2_seq = val_batch['y2_seq'].to(device)
                     params = val_batch['context'].unsqueeze(1).to(device)
                     time_len = y1_seq.shape[1]
+                    batch_size = y1_seq.shape[0]
                     
+                    # Generate the Mask
+                    num_obs = torch.randint(1, obs_max + 1, (1,)).item()
+                    val_mask = torch.ones(batch_size, time_len, dtype=torch.bool, device=device)
+                    for b in range(batch_size):
+                        obs_idx = torch.randperm(time_len, device=device)[:num_obs]
+                        val_mask[b, obs_idx] = False
+
                     # Diffusion Sampling
-                    pred_fwd = model.sample(y1_seq, params, target_dim='y1', time_len=time_len)
-                    pred_inv = model.sample(y1_seq, params, target_dim='y2', time_len=time_len)
+                    pred_fwd = model.sample(y1_seq, params, mask_indices=val_mask, target_dim='y1', time_len=time_len)
+                    pred_inv = model.sample(y1_seq, params, mask_indices=val_mask, target_dim='y2', time_len=time_len)
                     
                     epoch_val_fwd_mse += torch.nn.functional.mse_loss(pred_fwd, y1_seq).item()
                     epoch_val_inv_mse += torch.nn.functional.mse_loss(pred_inv, y2_seq).item()
@@ -537,7 +581,6 @@ if __name__ == "__main__":
         dropout_p = [0.0, 0.0]
         gradient_clip_norm = 5.0
         extra_pass_prob = 0.20
-        mask_drop_prob_max = None
         OBS_MAX = 10
         
         if args.dataset in ["reassemble", "synthetic_small"]:
@@ -552,7 +595,7 @@ if __name__ == "__main__":
         dropout_p = [0.1, 0.0]
         gradient_clip_norm = 3.0
         extra_pass_prob = 0.25
-        mask_drop_prob_max = 0.45
+        OBS_MAX = 10
 
         if args.dataset in ["reassemble", "synthetic_small"]:
             BATCH_SIZE = 32
@@ -566,7 +609,7 @@ if __name__ == "__main__":
         dropout_p = [0.1, 0.0]
         gradient_clip_norm = 3.0
         extra_pass_prob = 0.25
-        mask_drop_prob_max = 0.45
+        OBS_MAX = 10
 
         if args.dataset in ["reassemble", "synthetic_small"]:
             BATCH_SIZE = 32
@@ -634,7 +677,7 @@ if __name__ == "__main__":
         'objects_config': str(full_dataset.object_config),
         'unpaired_training': True,
         'extra_pass_probability': extra_pass_prob,
-        'mask_drop_prob_max': mask_drop_prob_max,
+        'obs_max': OBS_MAX,
         'gradient_clip_norm': gradient_clip_norm,
         'seed': args.seed
     }
@@ -694,7 +737,7 @@ if __name__ == "__main__":
             norm_stats=norm_stats,
             gradient_clip_norm=gradient_clip_norm,
             extra_pass_prob=extra_pass_prob,
-            mask_drop_prob_max=mask_drop_prob_max
+            obs_max=OBS_MAX
         )
     elif args.model in ["tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention"]:
         train_tedp(
@@ -713,5 +756,5 @@ if __name__ == "__main__":
             norm_stats=norm_stats,
             gradient_clip_norm=gradient_clip_norm,
             extra_pass_prob=extra_pass_prob,
-            mask_drop_prob_max=mask_drop_prob_max
+            obs_max=OBS_MAX
         )
