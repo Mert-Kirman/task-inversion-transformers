@@ -23,6 +23,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train CNMP/TEMP/TEDP models on Reassemble/Synthetic datasets.")
     parser.add_argument("--model", type=str, required=True, choices=["cnmp", "temp_vanilla", "temp_unmasked_pooling", "tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"], help="Which model architecture to train.")
     parser.add_argument("--dataset", type=str, required=True, choices=["reassemble", "synthetic_small", "synthetic_large"], help="Which dataset to train on.")
+    parser.add_argument("--epochs", type=int, help="Number of training epochs.")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -617,6 +618,9 @@ if __name__ == "__main__":
         elif args.dataset == "synthetic_large":
             BATCH_SIZE = 128
             EPOCHS = 601
+
+    if args.epochs is not None:
+        EPOCHS = args.epochs
 
     # Create DataLoaders
     train_inversion_loader = DataLoader(train_inversion_dataset, batch_size=BATCH_SIZE, shuffle=True)
