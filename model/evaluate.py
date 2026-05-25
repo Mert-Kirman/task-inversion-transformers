@@ -22,7 +22,7 @@ from scipy.signal import savgol_filter
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate CNMP/TEMP/TEDP models on Reassemble/Synthetic datasets.")
-    parser.add_argument("--model", type=str, required=True, choices=["cnmp", "temp_vanilla", "temp_unmasked_pooling", "tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention"], help="Which model architecture to evaluate.")
+    parser.add_argument("--model", type=str, required=True, choices=["cnmp", "temp_vanilla", "temp_unmasked_pooling", "tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"], help="Which model architecture to evaluate.")
     parser.add_argument("--dataset", type=str, required=True, choices=["reassemble", "synthetic_small", "synthetic_large"], help="Which dataset to evaluate on.")
     parser.add_argument("--run_id", type=str, required=True, help="Identifier for the model run to load and evaluate.")
     parser.add_argument("--seed", type=int, default=42)
@@ -741,7 +741,7 @@ if __name__ == "__main__":
             from model.transformer_encoded_movement_primitive.unmasked_pooling import temp_model
             model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
         
-    elif args.model in ["tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention"]:
+    elif args.model in ["tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"]:
         save_path = f"model/transformer_encoded_diffusion_policy/save/{args.run_id}"
         if args.model == "tedp_vanilla":
             from model.transformer_encoded_diffusion_policy import tedp_model
@@ -751,6 +751,9 @@ if __name__ == "__main__":
             model = tedp_model.TedpModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
         elif args.model == "tedp_cross_attention":
             from model.transformer_encoded_diffusion_policy.cross_attention_conditioning import tedp_model
+            model = tedp_model.TedpModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
+        elif args.model == "tedp_cfg":
+            from model.transformer_encoded_diffusion_policy.classifier_free_guidance import tedp_model
             model = tedp_model.TedpModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
     
     if not os.path.exists(save_path):
