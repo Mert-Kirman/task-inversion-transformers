@@ -213,7 +213,8 @@ def generate_reassemble_synthetic_dataset(base_dir="data/synthetic_trajectories"
     
     print(f"Generating Relativized Synthetic Dataset in '{base_dir}'...")
     
-    # The standardized Pick/Drop area is the origin
+    # The standardized Pick/Drop area is the ORIGIN (0,0,0)
+    # Because the data was relativized to the START of the forward trajectory in the air.
     base_hub = np.array([0.0, 0.0, 0.0])
 
     for obj_id in range(num_objects):
@@ -231,14 +232,16 @@ def generate_reassemble_synthetic_dataset(base_dir="data/synthetic_trajectories"
 
         for _ in range(paired_samples):
             # Generate Spoke (Insertion Point)
+            # This is the physical hole. Because the robot started high in the air (0,0,0),
+            # the hole is relative to that, meaning it is usually below it (negative Z).
             angle = np.random.uniform(0, 2 * math.pi)
-            radius = np.random.uniform(0.1, 0.6)
-            spoke_z_jitter = np.random.uniform(-0.03, 0.03) 
-            pt_spoke = np.array([radius * math.cos(angle), radius * math.sin(angle), spoke_z_jitter])
-            
-            # Hub (Origin) has slight jitter
-            pt_hub_pick = base_hub + np.array([np.random.uniform(-0.01, 0.01), np.random.uniform(-0.01, 0.01), 0])
-            pt_hub_drop = base_hub + np.array([np.random.uniform(-0.01, 0.01), np.random.uniform(-0.01, 0.01), 0])
+            radius = np.random.uniform(0.1, 0.95)
+            spoke_z = np.random.uniform(-0.20, 0.05) 
+            pt_spoke = np.array([radius * math.cos(angle), radius * math.sin(angle), spoke_z])
+
+            # Hub (Origin) has slight jitter (robot isn't perfectly precise at returning to 0)
+            pt_hub_pick = base_hub + np.array([np.random.uniform(-0.01, 0.01), np.random.uniform(-0.01, 0.01), np.random.uniform(-0.005, 0.005)])
+            pt_hub_drop = base_hub + np.array([np.random.uniform(-0.01, 0.01), np.random.uniform(-0.01, 0.01), np.random.uniform(-0.005, 0.005)])
 
             # Hungarian Matching Gap
             spoke_gap = np.array([np.random.uniform(-0.01, 0.01), np.random.uniform(-0.01, 0.01), np.random.uniform(0.01, 0.05)])
@@ -249,22 +252,24 @@ def generate_reassemble_synthetic_dataset(base_dir="data/synthetic_trajectories"
             # MESSY REALITY INJECTIONS
             # ==========================================
             
-            # 1. Blurry Z-Shells (Vary the arc height for every trajectory)
-            base_z_clearance = 0.15
-            noisy_z_clearance = base_z_clearance + np.random.normal(0, 0.02)
+            # 1. Arc Clearance (Forces the trajectory to arc upwards relative to the origin before diving down)
+            base_z_clearance = np.random.uniform(0.08, 0.24)
             
             # 2. Flattened Arcs (Pull control points horizontally towards the middle)
             flatten_factor = 0.50 
             
             # Forward (Pick -> Insert)
-            fwd_p1 = pt_hub_pick + (pt_spoke_fwd_end - pt_hub_pick) * flatten_factor + np.array([0, 0, noisy_z_clearance])
-            fwd_p2 = pt_spoke_fwd_end - (pt_spoke_fwd_end - pt_hub_pick) * flatten_factor + np.array([0, 0, noisy_z_clearance])
+            fwd_p1 = pt_hub_pick + (pt_spoke_fwd_end - pt_hub_pick) * flatten_factor
+            fwd_p1[2] = pt_hub_pick[2] + base_z_clearance # Force absolute peak height
+            fwd_p2 = pt_spoke_fwd_end - (pt_spoke_fwd_end - pt_hub_pick) * flatten_factor
+            fwd_p2[2] = pt_hub_pick[2] + base_z_clearance
             fwd_traj = cubic_bezier(pt_hub_pick, fwd_p1, fwd_p2, pt_spoke_fwd_end, 200)
             
             # Inverse (Extract -> Drop)
-            # Pull inv_p1 up slightly higher to clear the hole before flattening out
-            inv_p1 = pt_spoke_inv_start - (pt_spoke_inv_start - pt_hub_drop) * (flatten_factor * 0.5) + np.array([0, 0, noisy_z_clearance - 0.04])
-            inv_p2 = pt_hub_drop + (pt_spoke_inv_start - pt_hub_drop) * flatten_factor + np.array([0, 0, noisy_z_clearance - 0.02])
+            inv_p1 = pt_spoke_inv_start - (pt_spoke_inv_start - pt_hub_drop) * (flatten_factor * 0.5)
+            inv_p1[2] = pt_hub_drop[2] + base_z_clearance
+            inv_p2 = pt_hub_drop + (pt_spoke_inv_start - pt_hub_drop) * flatten_factor
+            inv_p2[2] = pt_hub_drop[2] + base_z_clearance
             inv_traj = cubic_bezier(pt_spoke_inv_start, inv_p1, inv_p2, pt_hub_drop, 200)
 
             # 3. Mid-Flight XY Wandering
@@ -281,10 +286,6 @@ def generate_reassemble_synthetic_dataset(base_dir="data/synthetic_trajectories"
             inv_traj[:, 0] += (wander_mask * -wander_x * 0.8).squeeze()
             inv_traj[:, 1] += (wander_mask * -wander_y * 0.8).squeeze()
 
-            # ==========================================
-            # END MESSY REALITY INJECTIONS
-            # ==========================================
-
             # INJECT INSERTION WIGGLES (Last 20% of Forward Trajectory, approaching Spoke)
             fwd_wiggle_mask = np.where(t > 0.8, (t - 0.8) * 5, 0)
             fwd_traj[:, 0] += (np.sin(t * wiggle_freq) * wiggle_amp * fwd_wiggle_mask).squeeze()
@@ -296,8 +297,8 @@ def generate_reassemble_synthetic_dataset(base_dir="data/synthetic_trajectories"
             inv_traj[:, 1] += (np.cos(t * wiggle_freq * 1.2) * wiggle_amp * inv_wiggle_mask).squeeze()
 
             if plot:
-                ax.plot(fwd_traj[:, 0], fwd_traj[:, 1], fwd_traj[:, 2], color='blue', alpha=0.2)
-                ax.plot(inv_traj[:, 0], inv_traj[:, 1], inv_traj[:, 2], color='orange', alpha=0.2)
+                ax.plot(fwd_traj[:, 0], fwd_traj[:, 1], fwd_traj[:, 2], color='blue', alpha=0.3, linewidth=1.5)
+                ax.plot(inv_traj[:, 0], inv_traj[:, 1], inv_traj[:, 2], color='orange', alpha=0.3, linewidth=1.5)
             else:
                 insert_data.append({'pose': [fwd_traj]})
                 place_data.append({'pose': [inv_traj]})
