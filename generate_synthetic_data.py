@@ -232,19 +232,25 @@ def generate_reassemble_synthetic_dataset(base_dir="data/synthetic_trajectories"
 
         for _ in range(paired_samples):
             # Generate Spoke (Insertion Point)
-            # This is the physical hole. Because the robot started high in the air (0,0,0),
-            # the hole is relative to that, meaning it is usually below it (negative Z).
             angle = np.random.uniform(0, 2 * math.pi)
             radius = np.random.uniform(0.1, 0.95)
-            spoke_z = np.random.uniform(-0.20, 0.05) 
+            
+            # Use a Normal distribution centered at -0.03 to match the visual bulk, 
+            # but mathematically clamp it to -0.22 to protect the Sim2Real bounding box
+            spoke_z = np.clip(np.random.normal(-0.03, 0.04), -0.22, 0.05) 
             pt_spoke = np.array([radius * math.cos(angle), radius * math.sin(angle), spoke_z])
 
-            # Hub (Origin) has slight jitter (robot isn't perfectly precise at returning to 0)
+            # Hub (Origin) has slight jitter
             pt_hub_pick = base_hub + np.array([np.random.uniform(-0.01, 0.01), np.random.uniform(-0.01, 0.01), np.random.uniform(-0.005, 0.005)])
             pt_hub_drop = base_hub + np.array([np.random.uniform(-0.01, 0.01), np.random.uniform(-0.01, 0.01), np.random.uniform(-0.005, 0.005)])
 
             # Hungarian Matching Gap
-            spoke_gap = np.array([np.random.uniform(-0.01, 0.01), np.random.uniform(-0.01, 0.01), np.random.uniform(0.01, 0.05)])
+            # The inverse trajectory visually starts higher (between -0.01 and 0.10)
+            # We cluster them around +0.04, but allow wide bounds for safety.
+            inv_start_z = np.clip(np.random.normal(0.04, 0.05), -0.05, 0.18)
+            z_gap = inv_start_z - spoke_z
+            
+            spoke_gap = np.array([np.random.uniform(-0.01, 0.01), np.random.uniform(-0.01, 0.01), z_gap])
             pt_spoke_fwd_end = pt_spoke 
             pt_spoke_inv_start = pt_spoke + spoke_gap
 
