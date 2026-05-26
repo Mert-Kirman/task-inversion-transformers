@@ -24,6 +24,7 @@ def parse_args():
     parser.add_argument("--model", type=str, required=True, choices=["cnmp", "temp_vanilla", "temp_unmasked_pooling", "tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"], help="Which model architecture to train.")
     parser.add_argument("--dataset", type=str, required=True, choices=["reassemble", "synthetic_small", "synthetic_large"], help="Which dataset to train on.")
     parser.add_argument("--epochs", type=int, help="Number of training epochs.")
+    parser.add_argument("--finetune_from", type=str, help="Run ID to a model checkpoint to finetune from (optional).")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -56,9 +57,9 @@ def normalize_data(Y1, Y2, C, training_indices):
     # Return the shared bounds
     return Y1_normalized, Y2_normalized, C_normalized, Y_min_vals, Y_max_vals, C_min_val, C_max_val
 
-def save_training_configs(save_folder, details_dict):
+def save_training_configs(run_folder, details_dict):
     '''Save training configurations (epoch count, batch size, input dimensions, model name etc) in a txt file for future reference'''
-    details_path = os.path.join(save_folder, 'training_configs.txt')
+    details_path = os.path.join(run_folder, 'training_configs.txt' if details_dict.get('finetune_from') is None else 'finetuning_details.txt')
     with open(details_path, 'w') as f:
         for key, value in details_dict.items():
             f.write(f"{key}: {value}\n")
@@ -86,8 +87,8 @@ def get_grad_norm(model):
             total_norm += param_norm.item() ** 2
     return total_norm ** 0.5
 
-def train_cnmp(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_max, d_x, d_y1, d_y2, d_param, time_len, training_indices, validation_indices, test_indices, save_folder, device, batch_size, gradient_clip_norm, extra_pass_prob, unpaired_traj=True):
-    sys.stdout = Logger(os.path.join(save_folder, 'train_log.txt'))
+def train_cnmp(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, obs_max, d_x, d_y1, d_y2, d_param, time_len, training_indices, validation_indices, test_indices, run_folder, device, batch_size, gradient_clip_norm, extra_pass_prob, unpaired_traj=True):
+    sys.stdout = Logger(os.path.join(run_folder, 'train_log.txt' if args.finetune_from is None else 'finetuning_log.txt'))
 
     training_errors = []
     validation_errors = []
@@ -140,17 +141,17 @@ def train_cnmp(model, optimizer, scheduler, EPOCHS, valid_inverses, demo_data, o
             losses.append(loss.item())
 
             # Save errors and losses
-            np.save(f'{save_folder}/training_errors_mse.npy', np.array(training_errors))
-            np.save(f'{save_folder}/validation_errors_mse.npy', np.array(validation_errors))
-            np.save(f'{save_folder}/losses_log_prob.npy', np.array(losses))
+            np.save(f'{run_folder}/training_errors_mse.npy' if args.finetune_from is None else f'{run_folder}/finetuning_training_errors_mse.npy', np.array(training_errors))
+            np.save(f'{run_folder}/validation_errors_mse.npy' if args.finetune_from is None else f'{run_folder}/finetuning_validation_errors_mse.npy', np.array(validation_errors))
+            np.save(f'{run_folder}/losses_log_prob.npy' if args.finetune_from is None else f'{run_folder}/finetuning_losses_log_prob.npy', np.array(losses))
 
             if min(validation_errors) == validation_errors[-1]:
                 # Save model
                 tqdm.write(f"Saved model epoch {epoch}, Train loss: {loss.item():6f}, Validation error: {epoch_val_error:6f}")
-                torch.save(model.state_dict(), f'{save_folder}/best_model.pth')
+                torch.save(model.state_dict(), f'{run_folder}/best_model.pth' if args.finetune_from is None else f'{run_folder}/finetuning_best_model.pth')
 
-def train_temp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_reconstruction_loader, val_loader, d_y1, d_y2, d_param, save_folder, device, norm_stats, gradient_clip_norm, extra_pass_prob, obs_max):
-    sys.stdout = Logger(os.path.join(save_folder, 'train_log.txt'))
+def train_temp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_reconstruction_loader, val_loader, d_y1, d_y2, d_param, run_folder, device, norm_stats, gradient_clip_norm, extra_pass_prob, obs_max):
+    sys.stdout = Logger(os.path.join(run_folder, 'train_log.txt' if args.finetune_from is None else 'finetuning_log.txt'))
 
     composite_loss_list = []
     train_fwd_mse_list = []
@@ -316,15 +317,15 @@ def train_temp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, trai
             val_inv_mse_list.append(avg_val_inv_mse)
             
             # Save metrics
-            np.save(os.path.join(save_folder, 'composite_losses.npy'), np.array(composite_loss_list))
+            np.save(os.path.join(run_folder, 'composite_losses.npy' if args.finetune_from is None else 'finetuning_composite_losses.npy'), np.array(composite_loss_list))
             
-            np.save(os.path.join(save_folder, 'train_fwd_mse.npy'), np.array(train_fwd_mse_list))
-            np.save(os.path.join(save_folder, 'val_fwd_mse.npy'), np.array(val_fwd_mse_list))
+            np.save(os.path.join(run_folder, 'train_fwd_mse.npy' if args.finetune_from is None else 'finetuning_train_fwd_mse.npy'), np.array(train_fwd_mse_list))
+            np.save(os.path.join(run_folder, 'val_fwd_mse.npy' if args.finetune_from is None else 'finetuning_val_fwd_mse.npy'), np.array(val_fwd_mse_list))
             
-            np.save(os.path.join(save_folder, 'train_inv_mse.npy'), np.array(train_inv_mse_list))
-            np.save(os.path.join(save_folder, 'val_inv_mse.npy'), np.array(val_inv_mse_list))
+            np.save(os.path.join(run_folder, 'train_inv_mse.npy' if args.finetune_from is None else 'finetuning_train_inv_mse.npy'), np.array(train_inv_mse_list))
+            np.save(os.path.join(run_folder, 'val_inv_mse.npy' if args.finetune_from is None else 'finetuning_val_inv_mse.npy'), np.array(val_inv_mse_list))
 
-            np.save(os.path.join(save_folder, 'grad_norms.npy'), np.array(grad_norm_list))
+            np.save(os.path.join(run_folder, 'grad_norms.npy' if args.finetune_from is None else 'finetuning_grad_norms.npy'), np.array(grad_norm_list))
 
             tqdm.write(f"Epoch {epoch}, Train Inv MSE: {avg_train_inv_mse:.6f}, Val Inv MSE: {avg_val_inv_mse:.6f}, Grad Norm: {avg_grad_norm:.4f}")
             
@@ -338,10 +339,10 @@ def train_temp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, trai
                     'norm_stats': norm_stats,
                     'epoch': epoch
                 }
-                torch.save(checkpoint, os.path.join(save_folder, 'best_model.pth'))
+                torch.save(checkpoint, os.path.join(run_folder, 'best_model.pth' if args.finetune_from is None else 'finetuning_best_model.pth'))
 
-def train_tedp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_reconstruction_loader, val_loader, d_y1, d_y2, d_param, save_folder, device, norm_stats, gradient_clip_norm, extra_pass_prob, obs_max):
-    sys.stdout = Logger(os.path.join(save_folder, 'train_log.txt'))
+def train_tedp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, train_reconstruction_loader, val_loader, d_y1, run_folder, device, norm_stats, gradient_clip_norm, extra_pass_prob, obs_max):
+    sys.stdout = Logger(os.path.join(run_folder, 'train_log.txt' if args.finetune_from is None else 'finetuning_log.txt'))
 
     composite_loss_list = []
     train_fwd_mse_list = []
@@ -485,15 +486,15 @@ def train_tedp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, trai
             val_inv_mse_list.append(avg_val_inv_mse)
             
             # Save metrics
-            np.save(os.path.join(save_folder, 'composite_losses.npy'), np.array(composite_loss_list))
+            np.save(os.path.join(run_folder, 'composite_losses.npy' if args.finetune_from is None else 'finetuning_composite_losses.npy'), np.array(composite_loss_list))
             
-            np.save(os.path.join(save_folder, 'train_fwd_mse.npy'), np.array(train_fwd_mse_list))
-            np.save(os.path.join(save_folder, 'val_fwd_mse.npy'), np.array(val_fwd_mse_list))
+            np.save(os.path.join(run_folder, 'train_fwd_mse.npy' if args.finetune_from is None else 'finetuning_train_fwd_mse.npy'), np.array(train_fwd_mse_list))
+            np.save(os.path.join(run_folder, 'val_fwd_mse.npy' if args.finetune_from is None else 'finetuning_val_fwd_mse.npy'), np.array(val_fwd_mse_list))
             
-            np.save(os.path.join(save_folder, 'train_inv_mse.npy'), np.array(train_inv_mse_list))
-            np.save(os.path.join(save_folder, 'val_inv_mse.npy'), np.array(val_inv_mse_list))
+            np.save(os.path.join(run_folder, 'train_inv_mse.npy' if args.finetune_from is None else 'finetuning_train_inv_mse.npy'), np.array(train_inv_mse_list))
+            np.save(os.path.join(run_folder, 'val_inv_mse.npy' if args.finetune_from is None else 'finetuning_val_inv_mse.npy'), np.array(val_inv_mse_list))
 
-            np.save(os.path.join(save_folder, 'grad_norms.npy'), np.array(grad_norm_list))
+            np.save(os.path.join(run_folder, 'grad_norms.npy' if args.finetune_from is None else 'finetuning_grad_norms.npy'), np.array(grad_norm_list))
 
             tqdm.write(f"Epoch {epoch}, Train Inv MSE: {avg_train_inv_mse:.6f}, Val Inv MSE: {avg_val_inv_mse:.6f}, Grad Norm: {avg_grad_norm:.4f}")
             
@@ -507,7 +508,7 @@ def train_tedp(model, optimizer, scheduler, EPOCHS, train_inversion_loader, trai
                     'norm_stats': norm_stats,
                     'epoch': epoch
                 }
-                torch.save(checkpoint, os.path.join(save_folder, 'best_model.pth'))
+                torch.save(checkpoint, os.path.join(run_folder, 'best_model.pth' if args.finetune_from is None else 'finetuning_best_model.pth'))
 
 
 if __name__ == "__main__":
@@ -551,21 +552,52 @@ if __name__ == "__main__":
         random_state=args.seed
     )
 
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-
     if args.model == "cnmp":
-        save_folder = f"model/dual_cnmp_latent_alignment/save/run_{run_id}"
+        save_folder = f"model/dual_cnmp_latent_alignment/save"
     elif args.model in ["temp_vanilla", "temp_unmasked_pooling"]:
-        save_folder = f"model/transformer_encoded_movement_primitive/save/run_{run_id}"
+        save_folder = f"model/transformer_encoded_movement_primitive/save"
     elif args.model in ["tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"]:
-        save_folder = f"model/transformer_encoded_diffusion_policy/save/run_{run_id}"
-    os.makedirs(save_folder, exist_ok=True)
+        save_folder = f"model/transformer_encoded_diffusion_policy/save"
+
+    if args.finetune_from:
+        run_folder = os.path.join(save_folder, args.finetune_from)
+        if not os.path.exists(run_folder):
+            raise ValueError(f"Specified finetune_from run folder does not exist: {run_folder}")
+        
+        print(f"Loading Pre-Trained Model and Normalization Stats from: {run_folder}")
+        checkpoint = torch.load(os.path.join(run_folder, 'best_model.pth'))
+        
+        # Extract the pre-trained normalization stats
+        if args.model == "cnmp":
+            norm_stats = np.load(os.path.join(run_folder, 'normalization_stats.npy'), allow_pickle=True).item()
+        else:
+            norm_stats = checkpoint['norm_stats']
+
+        Y_min_vals = norm_stats['Y_min']
+        Y_max_vals = norm_stats['Y_max']
+        C_min_val = norm_stats['C_min']
+        C_max_val = norm_stats['C_max']
+        
+        epsilon = 1e-8
+        # Force the REASSEMBLE dataset to normalize using SYNTHETIC bounds
+        full_dataset.Y1 = (full_dataset.Y1 - Y_min_vals) / (Y_max_vals - Y_min_vals + epsilon)
+        full_dataset.Y2 = (full_dataset.Y2 - Y_min_vals) / (Y_max_vals - Y_min_vals + epsilon)
+        full_dataset.C = (full_dataset.C - C_min_val) / (C_max_val - C_min_val + epsilon)
+
+    else: # Training from scratch
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_folder = os.path.join(save_folder, f"run_{run_id}")
+        os.makedirs(run_folder, exist_ok=True)
+
+        # Standard training from scratch: Calculate dynamic bounds (Calculate normalization stats only on the training subset (avoid data leakage))
+        full_dataset.Y1, full_dataset.Y2, full_dataset.C, Y_min_vals, Y_max_vals, C_min_val, C_max_val = normalize_data(full_dataset.Y1, full_dataset.Y2, full_dataset.C, train_idx)
+        norm_stats = {
+            'Y_min': Y_min_vals, 'Y_max': Y_max_vals,
+            'C_min': C_min_val, 'C_max': C_max_val
+        }
 
     # Save the test indices so evaluation script knows exactly which data was held out
-    np.save(os.path.join(save_folder, 'test_indices.npy'), np.array(test_idx))
-
-    # Calculate normalization stats only on the training subset (avoid data leakage)
-    full_dataset.Y1, full_dataset.Y2, full_dataset.C, Y_min_vals, Y_max_vals, C_min_val, C_max_val = normalize_data(full_dataset.Y1, full_dataset.Y2, full_dataset.C, train_idx)
+    np.save(os.path.join(run_folder, 'test_indices.npy' if args.finetune_from is None else 'finetuning_test_indices.npy'), np.array(test_idx))
 
     # Filter indices for the Paired task
     paired_train_idx = [i for i in train_idx if full_dataset.valid_inverses[i]]
@@ -583,6 +615,7 @@ if __name__ == "__main__":
         gradient_clip_norm = 5.0
         extra_pass_prob = 0.20
         OBS_MAX = 10
+        eta_min = 1e-6
         
         if args.dataset in ["reassemble", "synthetic_small"]:
             BATCH_SIZE = 32
@@ -597,6 +630,7 @@ if __name__ == "__main__":
         gradient_clip_norm = 3.0
         extra_pass_prob = 0.25
         OBS_MAX = 10
+        eta_min = 1e-6
 
         if args.dataset in ["reassemble", "synthetic_small"]:
             BATCH_SIZE = 32
@@ -611,6 +645,7 @@ if __name__ == "__main__":
         gradient_clip_norm = 3.0
         extra_pass_prob = 0.25
         OBS_MAX = 10
+        eta_min = 1e-6
 
         if args.dataset in ["reassemble", "synthetic_small"]:
             BATCH_SIZE = 32
@@ -621,6 +656,13 @@ if __name__ == "__main__":
 
     if args.epochs is not None:
         EPOCHS = args.epochs
+
+    # If finetuning, we want to override learning rate, epochs etc. to a smaller value to avoid blowing up the pre-trained weights
+    if args.finetune_from:
+        learning_rate = 1e-5
+        EPOCHS = 201
+        BATCH_SIZE = 32
+        eta_min = 1e-7
 
     # Create DataLoaders
     train_inversion_loader = DataLoader(train_inversion_dataset, batch_size=BATCH_SIZE, shuffle=True)
@@ -653,9 +695,17 @@ if __name__ == "__main__":
         elif args.model == "tedp_cfg":
             from model.transformer_encoded_diffusion_policy.classifier_free_guidance import tedp_model
             model = tedp_model.TedpModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param, dropout_p=dropout_p).to(device)
+
+    # If finetuning, load the pre-trained weights
+    if args.finetune_from:
+        if args.model == "cnmp":
+            model.load_state_dict(checkpoint)
+        else:
+            model.load_state_dict(checkpoint['model_state_dict'])
+        print("Pre-trained weights loaded successfully!")
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=eta_min)
 
     # Save training configuration details
     training_details = {
@@ -686,23 +736,16 @@ if __name__ == "__main__":
         'extra_pass_probability': extra_pass_prob,
         'obs_max': OBS_MAX,
         'gradient_clip_norm': gradient_clip_norm,
-        'seed': args.seed
+        'seed': args.seed,
+        'finetune_from': args.finetune_from
     }
     
-    save_training_configs(save_folder, training_details)
-
-    # Package the normalization stats to save inside the checkpoint
-    norm_stats = {
-        'Y_min': Y_min_vals,
-        'Y_max': Y_max_vals,
-        'C_min': C_min_val,
-        'C_max': C_max_val
-    }
+    save_training_configs(run_folder, training_details)
 
     if args.model == "cnmp":
         for key, value in norm_stats.items():
             norm_stats[key] = value.cpu()
-        np.save(os.path.join(save_folder, 'normalization_stats.npy'), norm_stats)
+        np.save(os.path.join(run_folder, 'normalization_stats.npy'), norm_stats)
 
         train_cnmp(
             model=model, 
@@ -720,7 +763,7 @@ if __name__ == "__main__":
             training_indices=train_idx, 
             validation_indices=val_idx, 
             test_indices=test_idx, 
-            save_folder=save_folder, 
+            run_folder=run_folder, 
             device=device, 
             batch_size=BATCH_SIZE, 
             gradient_clip_norm=gradient_clip_norm,
@@ -739,7 +782,7 @@ if __name__ == "__main__":
             d_y1=full_dataset.d_y1, 
             d_y2=full_dataset.d_y2, 
             d_param=full_dataset.d_param, 
-            save_folder=save_folder, 
+            run_folder=run_folder, 
             device=device,
             norm_stats=norm_stats,
             gradient_clip_norm=gradient_clip_norm,
@@ -756,9 +799,7 @@ if __name__ == "__main__":
             train_reconstruction_loader=train_reconstruction_loader, 
             val_loader=val_loader, 
             d_y1=full_dataset.d_y1, 
-            d_y2=full_dataset.d_y2, 
-            d_param=full_dataset.d_param, 
-            save_folder=save_folder, 
+            run_folder=run_folder, 
             device=device,
             norm_stats=norm_stats,
             gradient_clip_norm=gradient_clip_norm,
