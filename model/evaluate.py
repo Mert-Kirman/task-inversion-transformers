@@ -25,7 +25,7 @@ def parse_args():
     parser.add_argument("--model", type=str, required=True, choices=["cnmp", "temp_vanilla", "temp_unmasked_pooling", "tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"], help="Which model architecture to evaluate.")
     parser.add_argument("--dataset", type=str, required=True, choices=["reassemble", "synthetic_small", "synthetic_large"], help="Which dataset to evaluate on.")
     parser.add_argument("--run_id", type=str, required=True, help="Identifier for the model run to load and evaluate.")
-    parser.add_argument("--fine_tuned", action='store_false', help="Whether to perform evaluation on pretrained or fine-tuned model.")
+    parser.add_argument("--fine_tuned", action='store_true', help="Perform evaluation on fine-tuned model.")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
