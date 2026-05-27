@@ -637,7 +637,7 @@ if __name__ == "__main__":
             EPOCHS = 1001
         elif args.dataset == "synthetic_large":
             BATCH_SIZE = 128
-            EPOCHS = 401
+            EPOCHS = 801
     elif args.model in ["tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"]:
         learning_rate = 1e-4
         weight_decay = 3.5e-5
@@ -652,7 +652,7 @@ if __name__ == "__main__":
             EPOCHS = 1001
         elif args.dataset == "synthetic_large":
             BATCH_SIZE = 128
-            EPOCHS = 601
+            EPOCHS = 801
 
     if args.epochs is not None:
         EPOCHS = args.epochs
