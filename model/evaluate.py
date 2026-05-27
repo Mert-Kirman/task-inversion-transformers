@@ -25,6 +25,7 @@ def parse_args():
     parser.add_argument("--model", type=str, required=True, choices=["cnmp", "temp_vanilla", "temp_unmasked_pooling", "tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"], help="Which model architecture to evaluate.")
     parser.add_argument("--dataset", type=str, required=True, choices=["reassemble", "synthetic_small", "synthetic_large"], help="Which dataset to evaluate on.")
     parser.add_argument("--run_id", type=str, required=True, help="Identifier for the model run to load and evaluate.")
+    parser.add_argument("--fine_tuned", action='store_false', help="Whether to perform evaluation on pretrained or fine-tuned model.")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -44,10 +45,10 @@ def denormalize_data(tensor, min_val, max_val):
     denominator = max_val - min_val
     return tensor * denominator + min_val
 
-def plot_grad_norms(save_path):
+def plot_grad_norms(load_path, save_path, args):
     """Plots the gradient norms over epochs if they exist."""
     try:
-        grad_norms = np.load(os.path.join(save_path, 'grad_norms.npy'))
+        grad_norms = np.load(os.path.join(load_path, 'grad_norms.npy' if not args.fine_tuned else 'finetuning_grad_norms.npy'))
         plt.figure(figsize=(8, 5))
         plt.plot(grad_norms, label='Gradient Norm')
         window_size = 20
@@ -65,12 +66,12 @@ def plot_grad_norms(save_path):
     except FileNotFoundError:
         print("Gradient norms log not found, skipping gradient norm plot.")
 
-def plot_training_progress_cnmp(save_path):
+def plot_training_progress_cnmp(load_path, save_path, args):
     """Plots loss and error curves if they exist."""
     try:
-        train_err = np.load(f'{save_path}/training_errors_mse.npy')
-        val_err = np.load(f'{save_path}/validation_errors_mse.npy')
-        losses = np.load(f'{save_path}/losses_log_prob.npy')
+        train_err = np.load(f'{load_path}/training_errors_mse.npy' if not args.fine_tuned else f'{load_path}/finetuning_training_errors_mse.npy')
+        val_err = np.load(f'{load_path}/validation_errors_mse.npy' if not args.fine_tuned else f'{load_path}/finetuning_validation_errors_mse.npy')
+        losses = np.load(f'{load_path}/losses_log_prob.npy' if not args.fine_tuned else f'{load_path}/finetuning_losses_log_prob.npy')
 
         plt.figure(figsize=(15, 5))
         
@@ -85,7 +86,7 @@ def plot_training_progress_cnmp(save_path):
         plt.plot(train_err, label='Train MSE', color='blue')
         plt.plot(val_err, label='Val MSE', color='red', linestyle='--')
         plt.title('Reconstruction Error (MSE)')
-        plt.xlabel('Epoch (x1000)')
+        plt.xlabel('Epoch (x400)')
         plt.ylabel('MSE')
         plt.grid(True, alpha=0.3)
         plt.legend()
@@ -105,16 +106,16 @@ def plot_training_progress_cnmp(save_path):
     except FileNotFoundError:
         print("Training logs not found, skipping progress plot.")
 
-def plot_training_progress_temp_tedp(save_path):
+def plot_training_progress_temp_tedp(load_path, save_path, args):
     """Plots loss and error curves if they exist."""
     try:
-        composite_losses = np.load(f'{save_path}/composite_losses.npy')
-        
-        train_fwd_mse = np.load(f'{save_path}/train_fwd_mse.npy')
-        train_inv_mse = np.load(f'{save_path}/train_inv_mse.npy')
+        composite_losses = np.load(f'{load_path}/composite_losses.npy' if not args.fine_tuned else f'{load_path}/finetuning_composite_losses.npy')
 
-        val_fwd_mse = np.load(f'{save_path}/val_fwd_mse.npy')
-        val_inv_mse = np.load(f'{save_path}/val_inv_mse.npy')
+        train_fwd_mse = np.load(f'{load_path}/train_fwd_mse.npy' if not args.fine_tuned else f'{load_path}/finetuning_train_fwd_mse.npy')
+        train_inv_mse = np.load(f'{load_path}/train_inv_mse.npy' if not args.fine_tuned else f'{load_path}/finetuning_train_inv_mse.npy')
+
+        val_fwd_mse = np.load(f'{load_path}/val_fwd_mse.npy' if not args.fine_tuned else f'{load_path}/finetuning_val_fwd_mse.npy')
+        val_inv_mse = np.load(f'{load_path}/val_inv_mse.npy' if not args.fine_tuned else f'{load_path}/finetuning_val_inv_mse.npy')
 
         plt.figure(figsize=(15, 5))
 
@@ -156,7 +157,7 @@ def plot_training_progress_temp_tedp(save_path):
     except FileNotFoundError:
         print("Training logs not found, skipping progress plot.")
 
-def calculate_success_rates_and_plot(save_path, full_dataset, norm_stats, model, args, device='cpu'):
+def calculate_success_rates_and_plot(load_path, save_path, full_dataset, norm_stats, model, args, device='cpu'):
     """
     Evaluates success based on Start (t=0) and End (t=1) point accuracy.
     Threshold: 5% (Strict) and 10% (Relaxed) of the global data range (per dimension).
@@ -183,7 +184,7 @@ def calculate_success_rates_and_plot(save_path, full_dataset, norm_stats, model,
     Y_max_vals = Y_max_vals.to(device)
 
     # Load the hidden test indices
-    test_idx = np.load(os.path.join(save_path, 'test_indices.npy'))
+    test_idx = np.load(os.path.join(load_path, 'test_indices.npy' if not args.fine_tuned else 'finetuning_test_indices.npy'))
 
     # Prepare the target time steps (all 200 points)
     x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1)
@@ -331,7 +332,7 @@ def calculate_success_rates_and_plot(save_path, full_dataset, norm_stats, model,
     plt.savefig(plot_path, dpi=300)
     print(f"Bar chart saved to {plot_path}")
 
-def calculate_continuous_errors_and_plot(save_path, full_dataset, norm_stats, model, args, device='cpu'):
+def calculate_continuous_errors_and_plot(load_path, save_path, full_dataset, norm_stats, model, args, device='cpu'):
     print("\n--- CALCULATING CONTINUOUS ERRORS (CM) & PLOTTING ---")
 
     Y_min_vals, Y_max_vals, C_min_val, C_max_val = norm_stats['Y_min'], norm_stats['Y_max'], norm_stats['C_min'], norm_stats['C_max']
@@ -348,7 +349,7 @@ def calculate_continuous_errors_and_plot(save_path, full_dataset, norm_stats, mo
     end_errors = {m: {} for m in metrics}
 
     # Load the hidden test indices
-    test_idx = np.load(os.path.join(save_path, 'test_indices.npy'))
+    test_idx = np.load(os.path.join(load_path, 'test_indices.npy' if not args.fine_tuned else 'finetuning_test_indices.npy'))
     print(f"Evaluating continuous errors on {len(test_idx)} test samples...")
     
     x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1)
@@ -517,7 +518,7 @@ def calculate_continuous_errors_and_plot(save_path, full_dataset, norm_stats, mo
     save_numerical_statistics(start_errors, "Start Point (t=0)", 'continuous_errors_stats_start.txt')
     save_numerical_statistics(end_errors, "End Point (t=1)", 'continuous_errors_stats_end.txt')
 
-def predict_random_trajectories(save_path, full_dataset, Y2_raw, norm_stats, model, args, num_samples=6, device='cpu'):
+def predict_random_trajectories(load_path, save_path, full_dataset, Y2_raw, norm_stats, model, args, num_samples=6, device='cpu'):
     print(f"\n--- PREDICTING RANDOM TRAJECTORIES ({num_samples} samples) ---")
 
     Y_min_vals, Y_max_vals, C_min_val, C_max_val = norm_stats['Y_min'], norm_stats['Y_max'], norm_stats['C_min'], norm_stats['C_max']
@@ -529,7 +530,7 @@ def predict_random_trajectories(save_path, full_dataset, Y2_raw, norm_stats, mod
     Y_max_vals = Y_max_vals.to(device)
 
     # Load test indices and sample from them
-    test_idx = np.load(os.path.join(save_path, 'test_indices.npy'))
+    test_idx = np.load(os.path.join(load_path, 'test_indices.npy' if not args.fine_tuned else 'finetuning_test_indices.npy'))
     test_idx_list = test_idx.tolist()
     
     num_to_plot = min(num_samples, len(test_idx_list))
@@ -728,12 +729,12 @@ if __name__ == "__main__":
     full_dataset = ReassembleDataset(data_dir=base_data_folder)
 
     if args.model == "cnmp":
-        save_path = f"model/dual_cnmp_latent_alignment/save/{args.run_id}"
+        load_path = f"model/dual_cnmp_latent_alignment/save/{args.run_id}"
         from model.dual_cnmp_latent_alignment import dual_cnmp_model
         model = dual_cnmp_model.DualCNMP(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
     
     elif args.model in ["temp_vanilla", "temp_unmasked_pooling"]:
-        save_path = f"model/transformer_encoded_movement_primitive/save/{args.run_id}"
+        load_path = f"model/transformer_encoded_movement_primitive/save/{args.run_id}"
         if args.model == "temp_vanilla":
             from model.transformer_encoded_movement_primitive import temp_model
             model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
@@ -742,7 +743,7 @@ if __name__ == "__main__":
             model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
         
     elif args.model in ["tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"]:
-        save_path = f"model/transformer_encoded_diffusion_policy/save/{args.run_id}"
+        load_path = f"model/transformer_encoded_diffusion_policy/save/{args.run_id}"
         if args.model == "tedp_vanilla":
             from model.transformer_encoded_diffusion_policy import tedp_model
             model = tedp_model.TedpModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
@@ -756,12 +757,15 @@ if __name__ == "__main__":
             from model.transformer_encoded_diffusion_policy.classifier_free_guidance import tedp_model
             model = tedp_model.TedpModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
     
-    if not os.path.exists(save_path):
-        print(f"Error: Save path {save_path} does not exist. Please check your run_id and ensure the model has been trained.")
+    if not os.path.exists(load_path):
+        print(f"Error: Load path {load_path} does not exist. Please check your run_id and ensure the model has been trained.")
         sys.exit(1)
 
+    save_path = os.path.join(load_path, "pretrained" if not args.fine_tuned else "finetuned")
+    os.makedirs(save_path, exist_ok=True)
+
     # Load the best model checkpoint
-    checkpoint = torch.load(os.path.join(save_path, "best_model.pth"))
+    checkpoint = torch.load(os.path.join(load_path, "best_model.pth" if not args.fine_tuned else "finetuning_best_model.pth"))
     if args.model == "cnmp":
         model.load_state_dict(checkpoint)
     else:
@@ -770,7 +774,7 @@ if __name__ == "__main__":
 
     # Normalize data
     if args.model == "cnmp":
-        norm_stats = np.load(os.path.join(save_path, 'normalization_stats.npy'), allow_pickle=True).item()
+        norm_stats = np.load(os.path.join(load_path, 'normalization_stats.npy'), allow_pickle=True).item()
     else:
         norm_stats = checkpoint['norm_stats']
     Y_min_vals, Y_max_vals, C_min_val, C_max_val = norm_stats['Y_min'], norm_stats['Y_max'], norm_stats['C_min'], norm_stats['C_max']
@@ -779,13 +783,13 @@ if __name__ == "__main__":
     Y2_raw = full_dataset.Y2.clone()    # Keep a raw copy of Y2 for plotting ground truth
     full_dataset.Y1, full_dataset.Y2, full_dataset.C = normalize_data(full_dataset.Y1, full_dataset.Y2, full_dataset.C, Y_min_vals, Y_max_vals, C_min_val, C_max_val)
     
-    plot_grad_norms(save_path)
+    plot_grad_norms(load_path, save_path, args)
 
     if args.model == "cnmp":
-        plot_training_progress_cnmp(save_path)
+        plot_training_progress_cnmp(load_path, save_path, args)
     else:
-        plot_training_progress_temp_tedp(save_path)
+        plot_training_progress_temp_tedp(load_path, save_path, args)
 
-    calculate_success_rates_and_plot(save_path, full_dataset, norm_stats, model, args, device=device)
-    calculate_continuous_errors_and_plot(save_path, full_dataset, norm_stats, model, args, device=device)
-    predict_random_trajectories(save_path, full_dataset, Y2_raw, norm_stats, model, args, num_samples=50, device=device)
+    calculate_success_rates_and_plot(load_path, save_path, full_dataset, norm_stats, model, args, device=device)
+    calculate_continuous_errors_and_plot(load_path, save_path, full_dataset, norm_stats, model, args, device=device)
+    predict_random_trajectories(load_path, save_path, full_dataset, Y2_raw, norm_stats, model, args, num_samples=50, device=device)
