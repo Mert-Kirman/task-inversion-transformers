@@ -100,10 +100,10 @@ class TedpModel(nn.Module):
         elif p == 2:
             latent = L_I # Inference: Conditioned on Inverse
 
-        # Classifier-Free Guidance logic: 20% chance to drop conditioning during training, forcing the model to learn to denoise without it.
+        # Classifier-Free Guidance logic: 10% chance to drop conditioning during training, forcing the model to learn to denoise without it.
         # ==========================================
         if self.training:
-            p_uncond = 0.20
+            p_uncond = 0.10
             # Create a mask of shape (batch, 1). 1.0 means drop, 0.0 means keep.
             drop_mask = (torch.rand(batch_size, 1, device=device) < p_uncond).float()
             
@@ -168,7 +168,7 @@ class TedpModel(nn.Module):
         seq = torch.randn((batch_size, time_len, dim_y), device=device)
         
         # CFG Guidance Scale (Experiment between 1.5 and 4.0. Usually 2.0 is the sweet spot)
-        w = 3.5
+        w = 2.0
         
         # Standard DDPM Reverse Loop
         for k in reversed(range(self.num_diffusion_steps)):
