@@ -25,6 +25,7 @@ def parse_args():
     parser.add_argument("--run_id", type=str, required=True, help="Identifier for the model run to load and evaluate.")
     parser.add_argument("--num_samples", type=int, default=10, help="Number of trajectories to sample from the test set for evaluation.")
     parser.add_argument("--perturb_pct", type=float, default=0.10, help="Percentage to shift the conditioning points (e.g., 0.10 for 10%).")
+    parser.add_argument("--fine_tuned", action='store_true', help="Perform evaluation on fine-tuned model.")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -42,7 +43,7 @@ def denormalize_data(tensor, min_val, max_val):
     denominator = max_val - min_val
     return tensor * denominator + min_val
 
-def condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, model, args, device='cpu'):
+def condition_perturbation_test(load_path, save_path, full_dataset, Y2_raw, norm_stats, model, args, device='cpu'):
     print(f"\n--- RUNNING CONDITIONING PERTURBATION TEST ({args.num_samples} samples) ---")
 
     Y_min_vals, Y_max_vals, C_min_val, C_max_val = norm_stats['Y_min'], norm_stats['Y_max'], norm_stats['C_min'], norm_stats['C_max']
@@ -56,7 +57,7 @@ def condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, mod
     C_max_val = C_max_val.to(device)
 
     # Load test indices and sample from them
-    test_idx = np.load(os.path.join(save_path, 'test_indices.npy'))
+    test_idx = np.load(os.path.join(load_path, 'test_indices.npy' if not args.fine_tuned else 'finetuning_test_indices.npy'))
     test_idx_list = test_idx.tolist()
     
     num_to_plot = min(args.num_samples, len(test_idx_list))
@@ -218,12 +219,12 @@ if __name__ == "__main__":
     full_dataset = ReassembleDataset(data_dir=base_data_folder)
 
     if args.model == "cnmp":
-        save_path = f"model/dual_cnmp_latent_alignment/save/{args.run_id}"
+        load_path = f"model/dual_cnmp_latent_alignment/save/{args.run_id}"
         from model.dual_cnmp_latent_alignment import dual_cnmp_model
         model = dual_cnmp_model.DualCNMP(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
     
     elif args.model in ["temp_vanilla", "temp_unmasked_pooling"]:
-        save_path = f"model/transformer_encoded_movement_primitive/save/{args.run_id}"
+        load_path = f"model/transformer_encoded_movement_primitive/save/{args.run_id}"
         if args.model == "temp_vanilla":
             from model.transformer_encoded_movement_primitive import temp_model
             model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
@@ -232,7 +233,7 @@ if __name__ == "__main__":
             model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
         
     elif args.model in ["tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"]:
-        save_path = f"model/transformer_encoded_diffusion_policy/save/{args.run_id}"
+        load_path = f"model/transformer_encoded_diffusion_policy/save/{args.run_id}"
         if args.model == "tedp_vanilla":
             from model.transformer_encoded_diffusion_policy import tedp_model
             model = tedp_model.TedpModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
@@ -246,12 +247,15 @@ if __name__ == "__main__":
             from model.transformer_encoded_diffusion_policy.classifier_free_guidance import tedp_model
             model = tedp_model.TedpModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
     
-    if not os.path.exists(save_path):
-        print(f"Error: Save path {save_path} does not exist. Please check your run_id and ensure the model has been trained.")
+    if not os.path.exists(load_path):
+        print(f"Error: Load path {load_path} does not exist. Please check your run_id and ensure the model has been trained.")
         sys.exit(1)
 
+    save_path = os.path.join(load_path, "pretrained" if not args.fine_tuned else "finetuned")
+    os.makedirs(save_path, exist_ok=True)
+
     # Load the best model checkpoint
-    checkpoint = torch.load(os.path.join(save_path, "best_model.pth"))
+    checkpoint = torch.load(os.path.join(load_path, "best_model.pth"))
     if args.model == "cnmp":
         model.load_state_dict(checkpoint)
     else:
@@ -260,7 +264,7 @@ if __name__ == "__main__":
 
     # Normalize data
     if args.model == "cnmp":
-        norm_stats = np.load(os.path.join(save_path, 'normalization_stats.npy'), allow_pickle=True).item()
+        norm_stats = np.load(os.path.join(load_path, 'normalization_stats.npy'), allow_pickle=True).item()
     else:
         norm_stats = checkpoint['norm_stats']
     Y_min_vals, Y_max_vals, C_min_val, C_max_val = norm_stats['Y_min'], norm_stats['Y_max'], norm_stats['C_min'], norm_stats['C_max']
@@ -271,4 +275,4 @@ if __name__ == "__main__":
     full_dataset.Y2 = normalize_data(full_dataset.Y2, Y_min_vals, Y_max_vals)
     full_dataset.C = normalize_data(full_dataset.C, C_min_val, C_max_val)
 
-    condition_perturbation_test(save_path, full_dataset, Y2_raw, norm_stats, model, args, device=device)
+    condition_perturbation_test(load_path, save_path, full_dataset, Y2_raw, norm_stats, model, args, device=device)
