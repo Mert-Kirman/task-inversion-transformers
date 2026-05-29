@@ -38,8 +38,8 @@ def find_test_pair(dataset):
             
             # Thresholds: C_dist < 0.02 (Very similar context), start_dist > 0.03 (At least 3cm apart at t=0)
             if c_dist < 0.02: print(f"Potential Match Found (Contextually Similar): C_dist={c_dist:.4f}")
-            if start_dist > 0.03: print(f"Potential Match Found (Different Inverse Start): Start_dist={start_dist:.4f}")
-            if c_dist < 0.02 and start_dist > 0.03:
+            if start_dist > 0.10: print(f"Potential Match Found (Different Inverse Start): Start_dist={start_dist:.4f}")
+            if c_dist < 0.02 and start_dist > 0.10:
                 print(f"Match Found! Indices: {i} and {j}")
                 print(f"  Task Param Distance: {c_dist:.4f}")
                 print(f"  Inverse Start Point Distance: {start_dist:.4f} meters")
