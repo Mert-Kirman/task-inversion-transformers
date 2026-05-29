@@ -17,21 +17,66 @@ def parse_args():
     args.out = os.path.join(args.out, f"comparison_{comparison_id}")
     return args
 
-def generate_comparative_plots(models_dict, output_dir="model/model_comparisons", time_point="End Point (t=1)", file_suffix="end"):
+
+def normalize_model_specs(config_data):
+    """Convert the JSON config into a list of model specifications.
+
+    Supported formats:
+    - New format: a list of objects with keys: name, path, finetuned
+    - Legacy format: a mapping of display name -> path
+    """
+    if isinstance(config_data, list):
+        model_specs = []
+        for entry in config_data:
+            if not isinstance(entry, dict):
+                raise ValueError("Each model entry must be an object.")
+            if "name" not in entry or "path" not in entry:
+                raise ValueError("Each model entry must include 'name' and 'path'.")
+            model_specs.append(
+                {
+                    "name": entry["name"],
+                    "path": entry["path"],
+                    "finetuned": bool(entry.get("finetuned", False)),
+                }
+            )
+        return model_specs
+
+    if isinstance(config_data, dict):
+        return [
+            {"name": model_name, "path": run_dir, "finetuned": False}
+            for model_name, run_dir in config_data.items()
+        ]
+
+    raise ValueError("Configuration file must contain either a list of model specs or a mapping of model names to paths.")
+
+
+def get_metrics_folder(run_dir, finetuned):
+    folder_name = "finetuned" if finetuned else "pretrained"
+    preferred_dir = os.path.join(run_dir, folder_name)
+    if os.path.isdir(preferred_dir):
+        return preferred_dir
+    return run_dir
+
+def generate_comparative_plots(model_specs, output_dir="model/model_comparisons", time_point="End Point (t=1)", file_suffix="end"):
     print(f"\nGenerating comparative plots for {time_point}...")
     os.makedirs(output_dir, exist_ok=True)
 
     df_list = []
     
-    # Dynamically load all models specified in the dictionary
-    for model_name, run_dir in models_dict.items():
-        csv_path = os.path.join(run_dir, f"continuous_error_violins_{file_suffix}.csv")
+    # Dynamically load all models specified in the configuration
+    for model_spec in model_specs:
+        model_name = model_spec["name"]
+        run_dir = model_spec["path"]
+        finetuned = model_spec["finetuned"]
+        metrics_dir = get_metrics_folder(run_dir, finetuned)
+        csv_path = os.path.join(metrics_dir, f"continuous_error_violins_{file_suffix}.csv")
         
         if not os.path.exists(csv_path):
             print(f"  [WARNING] Could not find {csv_path}. Skipping '{model_name}'.")
             continue
             
-        print(f"  Loaded data for: {model_name}")
+        folder_label = "finetuned" if finetuned else "pretrained"
+        print(f"  Loaded data for: {model_name} ({folder_label})")
         df = pd.read_csv(csv_path)
         df['Model'] = model_name
         df_list.append(df)
@@ -141,13 +186,15 @@ if __name__ == '__main__':
         sys.exit(1)
 
     with open(args.config, 'r') as f:
-        models_dict = json.load(f)
+        config_data = json.load(f)
 
-    print(f"Loaded configuration with {len(models_dict)} models.")
+    model_specs = normalize_model_specs(config_data)
+
+    print(f"Loaded configuration with {len(model_specs)} models.")
 
     # Generate plots for Start Point (t=0)
     generate_comparative_plots(
-        models_dict=models_dict, 
+        model_specs=model_specs, 
         output_dir=args.out, 
         time_point="Start Point (t=0)", 
         file_suffix="start"
@@ -155,7 +202,7 @@ if __name__ == '__main__':
 
     # Generate plots for End Point (t=1)
     generate_comparative_plots(
-        models_dict=models_dict, 
+        model_specs=model_specs, 
         output_dir=args.out, 
         time_point="End Point (t=1)", 
         file_suffix="end"
