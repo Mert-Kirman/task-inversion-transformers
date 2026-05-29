@@ -72,6 +72,7 @@ def condition_perturbation_test(load_path, save_path, full_dataset, Y2_raw, norm
 
     # Condition on t=0 and t=1
     cond_step_indices = [0, -1] 
+    # cond_step_indices = [0, 49, 99, 149, -1] 
     eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) 
     eval_mask[0, cond_step_indices] = False # False = Observed
 
@@ -108,6 +109,7 @@ def condition_perturbation_test(load_path, save_path, full_dataset, Y2_raw, norm
             
             val_orig_norm = y2_seq_orig[0, t_idx, :].clone()
 
+            # if t_idx in [0, -1]: # For t=0 and t=1, keep the perturbation within the original value
             if t_idx == -1:
                 val_minus_norm = val_orig_norm
                 val_plus_norm = val_orig_norm

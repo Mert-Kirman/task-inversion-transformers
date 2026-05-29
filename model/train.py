@@ -660,7 +660,7 @@ if __name__ == "__main__":
     # If finetuning, we want to override learning rate, epochs etc. to a smaller value to avoid blowing up the pre-trained weights
     if args.finetune_from:
         learning_rate = 1e-5
-        EPOCHS = 201
+        EPOCHS = 401 if args.model != "cnmp" else 6001
         BATCH_SIZE = 32
         eta_min = 1e-7
 
