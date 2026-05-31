@@ -20,7 +20,7 @@ from scipy.signal import savgol_filter
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate conditioning of CNMP/TEMP/TEDP models on perturbed Reassemble/Synthetic datasets to check conditioning response.")
-    parser.add_argument("--model", type=str, required=True, choices=["cnmp", "temp_vanilla", "temp_unmasked_pooling", "tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"], help="Which model architecture to evaluate.")
+    parser.add_argument("--model", type=str, required=True, choices=["cnmp", "temp_vanilla", "temp_unmasked_pooling", "temp_cls", "tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"], help="Which model architecture to evaluate.")
     parser.add_argument("--dataset", type=str, required=True, choices=["reassemble", "synthetic_small", "synthetic_large"], help="Which dataset to evaluate conditioning on.")
     parser.add_argument("--run_id", type=str, required=True, help="Identifier for the model run to load and evaluate.")
     parser.add_argument("--num_samples", type=int, default=10, help="Number of trajectories to sample from the test set for evaluation.")
@@ -225,13 +225,16 @@ if __name__ == "__main__":
         from model.dual_cnmp_latent_alignment import dual_cnmp_model
         model = dual_cnmp_model.DualCNMP(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
     
-    elif args.model in ["temp_vanilla", "temp_unmasked_pooling"]:
+    elif args.model in ["temp_vanilla", "temp_unmasked_pooling", "temp_cls"]:
         load_path = f"model/transformer_encoded_movement_primitive/save/{args.run_id}"
         if args.model == "temp_vanilla":
             from model.transformer_encoded_movement_primitive import temp_model
             model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
         elif args.model == "temp_unmasked_pooling":
             from model.transformer_encoded_movement_primitive.unmasked_pooling import temp_model
+            model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
+        elif args.model == "temp_cls":
+            from model.transformer_encoded_movement_primitive.cls_token import temp_model
             model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
         
     elif args.model in ["tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"]:

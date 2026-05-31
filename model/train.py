@@ -21,7 +21,7 @@ from model.utils import seed_everything
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train CNMP/TEMP/TEDP models on Reassemble/Synthetic datasets.")
-    parser.add_argument("--model", type=str, required=True, choices=["cnmp", "temp_vanilla", "temp_unmasked_pooling", "tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"], help="Which model architecture to train.")
+    parser.add_argument("--model", type=str, required=True, choices=["cnmp", "temp_vanilla", "temp_unmasked_pooling", "temp_cls", "tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"], help="Which model architecture to train.")
     parser.add_argument("--dataset", type=str, required=True, choices=["reassemble", "synthetic_small", "synthetic_large"], help="Which dataset to train on.")
     parser.add_argument("--epochs", type=int, help="Number of training epochs.")
     parser.add_argument("--finetune_from", type=str, help="Run ID to a model checkpoint to finetune from (optional).")
@@ -554,7 +554,7 @@ if __name__ == "__main__":
 
     if args.model == "cnmp":
         save_folder = f"model/dual_cnmp_latent_alignment/save"
-    elif args.model in ["temp_vanilla", "temp_unmasked_pooling"]:
+    elif args.model in ["temp_vanilla", "temp_unmasked_pooling", "temp_cls"]:
         save_folder = f"model/transformer_encoded_movement_primitive/save"
     elif args.model in ["tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"]:
         save_folder = f"model/transformer_encoded_diffusion_policy/save"
@@ -623,11 +623,11 @@ if __name__ == "__main__":
         elif args.dataset == "synthetic_large":
             BATCH_SIZE = 256
             EPOCHS = 4001
-    elif args.model in ["temp_vanilla", "temp_unmasked_pooling"]:
-        learning_rate = 1e-3
+    elif args.model in ["temp_vanilla", "temp_unmasked_pooling", "temp_cls"]:
+        learning_rate = 3e-4
         weight_decay = 3.5e-5
         dropout_p = [0.1, 0.0]
-        gradient_clip_norm = 3.0
+        gradient_clip_norm = 1.0
         extra_pass_prob = 0.25
         OBS_MAX = 10
         eta_min = 1e-6
@@ -674,12 +674,15 @@ if __name__ == "__main__":
         from model.dual_cnmp_latent_alignment import dual_cnmp_model
         model = dual_cnmp_model.DualCNMP(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param, dropout_p=dropout_p).to(device)
     
-    elif args.model in ["temp_vanilla", "temp_unmasked_pooling"]:
+    elif args.model in ["temp_vanilla", "temp_unmasked_pooling", "temp_cls"]:
         if args.model == "temp_vanilla":
             from model.transformer_encoded_movement_primitive import temp_model
             model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param, dropout_p=dropout_p).to(device)
         elif args.model == "temp_unmasked_pooling":
             from model.transformer_encoded_movement_primitive.unmasked_pooling import temp_model
+            model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param, dropout_p=dropout_p).to(device)
+        elif args.model == "temp_cls":
+            from model.transformer_encoded_movement_primitive.cls_token import temp_model
             model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param, dropout_p=dropout_p).to(device)
         
     elif args.model in ["tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"]:
@@ -770,7 +773,7 @@ if __name__ == "__main__":
             extra_pass_prob=extra_pass_prob,
             unpaired_traj=True
         )
-    elif args.model in ["temp_vanilla", "temp_unmasked_pooling"]:
+    elif args.model in ["temp_vanilla", "temp_unmasked_pooling", "temp_cls"]:
         train_temp(
             model=model, 
             optimizer=optimizer, 
