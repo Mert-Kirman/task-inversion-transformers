@@ -10,8 +10,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model.transformer_encoded_diffusion_policy.transformer_utils import TransformerTrajectoryEncoder
-from model.transformer_encoded_diffusion_policy.diffusion_utils import DDPMScheduler, ConditionalUNet1D
+from model.transformer_encoded_diffusion_policy.classifier_free_guidance.transformer_utils import TransformerTrajectoryEncoder
+from model.transformer_encoded_diffusion_policy.classifier_free_guidance.diffusion_utils import DDPMScheduler, ConditionalUNet1D
 
 
 class TedpModel(nn.Module):

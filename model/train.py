@@ -642,7 +642,7 @@ if __name__ == "__main__":
         learning_rate = 1e-4
         weight_decay = 3.5e-5
         dropout_p = [0.1, 0.0]
-        gradient_clip_norm = 3.0
+        gradient_clip_norm = 1.0
         extra_pass_prob = 0.25
         OBS_MAX = 10
         eta_min = 1e-6
