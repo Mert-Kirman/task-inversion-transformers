@@ -111,7 +111,7 @@ def generate_comparative_plots(model_specs, output_dir="model/model_comparisons"
     # ==========================================
     # 1. Grouped Violin Plot (Domain x Model)
     # ==========================================
-    plt.figure(figsize=(max(8, num_models * 2), 6)) # Dynamically widen plot if many models
+    plt.figure(figsize=(10, 7)) # Increased height slightly to fit bottom legend
     sns.violinplot(
         data=df_3d,
         x='Domain',
@@ -121,22 +121,25 @@ def generate_comparative_plots(model_specs, output_dir="model/model_comparisons"
         palette=palette,
         inner='box',
         cut=0,
+        density_norm='width',
         linewidth=1.5
     )
     plt.title(f'Spatial Generalization Performance Distribution\n{time_point}', fontsize=16, fontweight='bold')
     plt.ylabel('Euclidean Error (cm)', fontsize=14, fontweight='bold')
     plt.xlabel('')
-    if num_models > 4:
-        plt.xticks(rotation=15, ha='right') # Rotate x-labels if there are many models
-    plt.legend(title='Model Architecture', loc='upper left', bbox_to_anchor=(1.02, 1))
+    
+    # Moved legend to the bottom center, up to 2 columns
+    plt.legend(title='Model Architecture', loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=min(2, num_models))
+    
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'1_grouped_violin_comparison_{file_suffix}_extrap.png'), dpi=300)
+    # bbox_inches='tight' prevents the saved image from cutting off the new bottom legend
+    plt.savefig(os.path.join(output_dir, f'1_grouped_violin_comparison_{file_suffix}_extrap.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
     # ==========================================
     # 2. Grouped Box Plot (Domain x Model)
     # ==========================================
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(10, 7))
     sns.boxplot(
         data=df_3d,
         x='Domain',
@@ -150,15 +153,17 @@ def generate_comparative_plots(model_specs, output_dir="model/model_comparisons"
     plt.title(f'Domain-by-Domain Error Distribution\n{time_point}', fontsize=16, fontweight='bold')
     plt.ylabel('Euclidean Error (cm)', fontsize=14, fontweight='bold')
     plt.xlabel('')
-    plt.legend(title='Model Architecture', loc='upper left', bbox_to_anchor=(1.02, 1))
+    
+    plt.legend(title='Model Architecture', loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=min(2, num_models))
+    
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'2_grouped_boxplot_comparison_{file_suffix}.png'), dpi=300)
+    plt.savefig(os.path.join(output_dir, f'2_grouped_boxplot_comparison_{file_suffix}.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
     # ==========================================
     # 3. Grouped Bar Plot (Mean Errors Only)
     # ==========================================
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(10, 7))
     ax = sns.barplot(
         data=df_3d,
         x='Domain',
@@ -182,9 +187,10 @@ def generate_comparative_plots(model_specs, output_dir="model/model_comparisons"
                         ha='center', va='bottom', fontsize=10, fontweight='bold', 
                         xytext=(0, 3), textcoords='offset points')
 
-    plt.legend(title='Model Architecture', loc='upper left', bbox_to_anchor=(1.02, 1))
+    plt.legend(title='Model Architecture', loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=min(2, num_models))
+    
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'3_grouped_barplot_comparison_{file_suffix}.png'), dpi=300)
+    plt.savefig(os.path.join(output_dir, f'3_grouped_barplot_comparison_{file_suffix}.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
 if __name__ == '__main__':
