@@ -110,18 +110,15 @@ def plot_training_progress_temp_tedp(load_path, save_path, args):
     """Plots loss and error curves if they exist."""
     try:
         composite_losses = np.load(f'{load_path}/composite_losses.npy' if not args.fine_tuned else f'{load_path}/finetuning_composite_losses.npy')
-
         train_fwd_mse = np.load(f'{load_path}/train_fwd_mse.npy' if not args.fine_tuned else f'{load_path}/finetuning_train_fwd_mse.npy')
         train_inv_mse = np.load(f'{load_path}/train_inv_mse.npy' if not args.fine_tuned else f'{load_path}/finetuning_train_inv_mse.npy')
-
         val_fwd_mse = np.load(f'{load_path}/val_fwd_mse.npy' if not args.fine_tuned else f'{load_path}/finetuning_val_fwd_mse.npy')
         val_inv_mse = np.load(f'{load_path}/val_inv_mse.npy' if not args.fine_tuned else f'{load_path}/finetuning_val_inv_mse.npy')
 
         plt.figure(figsize=(15, 5))
 
         plt.subplot(1, 3, 1)
-        plt.plot(composite_losses, label='Composite Loss (Log Prob + Latent Alignment MSE)')
-        # Add a moving average for cleaner visualization
+        plt.plot(composite_losses, label='Composite Loss')
         window_size = 20
         moving_avg = np.convolve(composite_losses, np.ones(window_size)/window_size, mode='valid')
         plt.plot(range(window_size-1, len(composite_losses)), moving_avg, label=f'{window_size}-Epoch Moving Average')
@@ -158,48 +155,41 @@ def plot_training_progress_temp_tedp(load_path, save_path, args):
         print("Training logs not found, skipping progress plot.")
 
 def calculate_success_rates_and_plot(load_path, save_path, full_dataset, norm_stats, model, args, device='cpu'):
-    """
-    Evaluates success based on Start (t=0) and End (t=1) point accuracy.
-    Threshold: 5% (Strict) and 10% (Relaxed) of the global data range (per dimension).
-    """
     print("\n--- CALCULATING SUCCESS RATES & PLOTTING ---")
 
-    Y_min_vals, Y_max_vals, C_min_val, C_max_val = norm_stats['Y_min'], norm_stats['Y_max'], norm_stats['C_min'], norm_stats['C_max']
+    Y_min_vals, Y_max_vals = norm_stats['Y_min'].to(device), norm_stats['Y_max'].to(device)
+    global_range = (Y_max_vals - Y_min_vals).cpu().numpy()
     
-    # Determine Thresholds
-    global_range = Y_max_vals - Y_min_vals
-    
-    # Define scenarios: Label, Percentage, Threshold Vector
     scenarios = [
-        {'label': '5% (Strict)', 'pct': 0.05, 'thresh': 0.05 * global_range},
-        {'label': '10% (Relaxed)', 'pct': 0.10, 'thresh': 0.10 * global_range}
+        {'label': '5% (Strict)', 'thresh': 0.05 * global_range},
+        {'label': '10% (Relaxed)', 'thresh': 0.10 * global_range}
     ]
     
     print(f"Global Range (X, Y, Z): {global_range}")
     
     time_len = full_dataset.time_len
 
-    # Move bounds to device for denormalization
-    Y_min_vals = Y_min_vals.to(device)
-    Y_max_vals = Y_max_vals.to(device)
-
     # Load the hidden test indices
     test_idx = np.load(os.path.join(load_path, 'test_indices.npy' if not args.fine_tuned else 'finetuning_test_indices.npy'))
 
     # Prepare the target time steps (all 200 points)
     x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1)
-    predictions = []
     
-    print("Running Zero-Shot Inference (Conditioning on start and end points of inverse trajectories)...")
+    # We now group strictly by Left Side (Train/Seen) vs Right Side (Extrapolation)
+    groups = ['Left Side (Seen)', 'Right Side (Zero-Shot)']
+    final_stats = {s['label']: {g: 0 for g in groups} for s in scenarios}
+    group_counts = {g: 0 for g in groups}
+    group_successes = {s['label']: {g: 0 for g in groups} for s in scenarios}
+
+    print("Running Inference on Test Set...")
     for i in test_idx:
-        # Grab the full Forward Trajectory
         y1_seq = full_dataset.Y1[i].unsqueeze(0).to(device)
-        
-        # Grab the Inverse Trajectory
         y2_seq = full_dataset.Y2[i].unsqueeze(0).to(device)
-        
-        # Context
         curr_context = full_dataset.C[i].view(1, 1, -1).to(device)
+        is_seen = full_dataset.valid_inverses[i]
+        
+        group_key = groups[0] if is_seen else groups[1]
+        group_counts[group_key] += 1
 
         # Condition points
         condition_points = [0, -1] # t=0 and t=1 of the inverse trajectory corresponds to indices 0 and 199 (since time_len=200)
@@ -209,18 +199,11 @@ def calculate_success_rates_and_plot(load_path, save_path, full_dataset, norm_st
         # Run Inference
         with torch.no_grad():
             if args.model.startswith('cnmp'):
-                # Prepare Condition
-                cond_pts = []
-                for idx in condition_points:
-                    cond_pts.append([x_full[0, idx], y2_seq[0, idx]])
-
-                means_norm, _ = model_predict.predict_inverse_inverse(model, time_len, curr_context, cond_pts, full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, device=device)
-                pred_seq = means_norm
+                cond_pts = [[x_full[0, idx], y2_seq[0, idx]] for idx in condition_points]
+                pred_seq, _ = model_predict.predict_inverse_inverse(model, time_len, curr_context, cond_pts, full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, device=device)
             elif args.model.startswith('temp'):
                 output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=2, mask_indices_2=eval_mask)
-                # Extract the Predicted Inverse Trajectory
-                _, _, pred_mean_i, _ = output.chunk(4, dim=-1)
-                pred_seq = pred_mean_i
+                _, _, pred_seq, _ = output.chunk(4, dim=-1)
             elif args.model.startswith('tedp'):
                 pred_seq = model.sample(cond_seq=y2_seq, params=curr_context, mask_indices=eval_mask, source_dim='y2', target_dim='y2', time_len=time_len)
         
@@ -228,315 +211,170 @@ def calculate_success_rates_and_plot(load_path, save_path, full_dataset, norm_st
         pred_traj = denormalize_data(pred_seq.squeeze(0), Y_min_vals, Y_max_vals).cpu().numpy()
         gt_traj = denormalize_data(full_dataset.Y2[i].to(device), Y_min_vals, Y_max_vals).cpu().numpy()
         
-        # Identify Object Type dynamically via Context ID
-        curr_context_norm = full_dataset.C[i]
-        raw_id = denormalize_data(curr_context_norm, C_min_val, C_max_val)[-1].item()
-        
-        obj_key = None
-        min_diff = float('inf')
-        for key, config in full_dataset.object_config.items():
-            diff = abs(config['id'] - raw_id)
-            if diff < min_diff:
-                min_diff = diff
-                obj_key = key
-        
-        predictions.append({
-            'pred': pred_traj,
-            'gt': gt_traj,
-            'obj': obj_key
-        })
+        pred_start, gt_start = pred_traj[0], gt_traj[0]
+        pred_end, gt_end = pred_traj[-1], gt_traj[-1]
 
-    # Evaluate Success for Each Scenario
-    # Structure: results[scenario_label][obj_name] = success_rate
-    final_stats = {s['label']: {} for s in scenarios}
-    obj_counts = {}
-
-    for s in scenarios:
-        print(f"\nEvaluating Scenario: {s['label']}")
-        thresholds = s['thresh'].cpu().numpy()
-        
-        # Temp counters
-        counts = {} 
-        
-        for p in predictions:
-            obj = p['obj']
-            if obj not in counts: counts[obj] = {'total': 0, 'success': 0}
-            if obj not in obj_counts: obj_counts[obj] = 0 # Track total counts once
-            
-            counts[obj]['total'] += 1
-            if s == scenarios[0]: obj_counts[obj] += 1
-            
-            # Check Start (t=0) and End (t=1) - X(0) and Y(1) ONLY
-            pred_start = p['pred'][0]
-            gt_start = p['gt'][0]
-            start_ok = np.all(np.abs(pred_start - gt_start)[:2] <= thresholds[:2])
-            
-            pred_end = p['pred'][-1]
-            gt_end = p['gt'][-1]
-            end_ok = np.all(np.abs(pred_end - gt_end)[:2] <= thresholds[:2])
-            
+        for s in scenarios:
+            start_ok = np.all(np.abs(pred_start - gt_start)[:2] <= s['thresh'][:2])
+            end_ok = np.all(np.abs(pred_end - gt_end)[:2] <= s['thresh'][:2])
             if start_ok and end_ok:
-                counts[obj]['success'] += 1
-        
-        # Calculate Rates
-        for obj, stats in counts.items():
-            rate = (stats['success'] / stats['total']) * 100
-            final_stats[s['label']][obj] = rate
-            print(f"  {obj}: {rate:.2f}% ({stats['success']}/{stats['total']})")
+                group_successes[s['label']][group_key] += 1
 
-    # Generate Bar Chart
-    print("\nGenerating Bar Chart...")
+    # Calculate Rates
+    for s in scenarios:
+        for g in groups:
+            if group_counts[g] > 0:
+                final_stats[s['label']][g] = (group_successes[s['label']][g] / group_counts[g]) * 100
+
+    # Plot Bar Chart
+    labels = [f"{g}\n(n={group_counts[g]})" for g in groups]
+    x = np.arange(len(labels))
+    width = 0.35
     
-    # Only plot objects that actually appeared in the test set evaluation
-    evaluated_obj_keys = list(obj_counts.keys())
-    labels = [f"{full_dataset.object_config[k]['label']} (n={obj_counts[k]})" for k in evaluated_obj_keys]
+    fig, ax = plt.subplots(figsize=(10, 6))
+    rects1 = ax.bar(x - width/2, [final_stats['5% (Strict)'][g] for g in groups], width, label='5% Tolerance', color='#d9534f')
+    rects2 = ax.bar(x + width/2, [final_stats['10% (Relaxed)'][g] for g in groups], width, label='10% Tolerance', color='#5bc0de')
     
-    x = np.arange(len(labels))  # label locations
-    width = 0.35  # width of the bars
-    
-    fig, ax = plt.subplots(figsize=(14, 6))
-    
-    # Plot bars using safe .get() in case a category was missing in one scenario
-    rects1 = ax.bar(x - width/2, [final_stats['5% (Strict)'].get(k, 0) for k in evaluated_obj_keys], width, label='5% Tolerance (Strict)', color='#d9534f')
-    rects2 = ax.bar(x + width/2, [final_stats['10% (Relaxed)'].get(k, 0) for k in evaluated_obj_keys], width, label='10% Tolerance (Relaxed)', color='#5bc0de')
-    
-    # Styling
     ax.set_ylabel('Success Rate (%)', fontsize=12, fontweight='bold')
-    ax.set_title(f'Task Extrapolation Success Rates (Test Set)\n{args.model.upper()}', fontsize=14, fontweight='bold')
+    ax.set_title(f'Spatial Generalization Success Rates\n{args.model.upper()}', fontsize=14, fontweight='bold')
     ax.set_xticks(x)
-    
-    # Rotate labels so they don't overlap
-    ax.set_xticklabels(labels, fontsize=8, fontweight='bold', rotation=45, ha='right')
-    ax.set_ylim(0, 130)
-    ax.legend(loc='upper center', ncol=2, fontsize=10)
+    ax.set_xticklabels(labels, fontsize=11, fontweight='bold')
+    ax.set_ylim(0, 120)
+    ax.legend(loc='upper right', fontsize=10)
     ax.grid(axis='y', linestyle='--', alpha=0.5)
     
-    # Add Value Labels on top of bars
     def autolabel(rects):
         for rect in rects:
             height = rect.get_height()
-            ax.annotate(f'{height:.1f}%',
-                        xy=(rect.get_x() + rect.get_width() / 2, height),
-                        xytext=(0, 5),
-                        textcoords="offset points",
-                        ha='center', va='bottom', 
-                        fontweight='bold',
-                        fontsize=6,
-                        rotation=45)    # Rotate text to prevent horizontal collision
+            ax.annotate(f'{height:.1f}%', xy=(rect.get_x() + rect.get_width() / 2, height),
+                        xytext=(0, 5), textcoords="offset points", ha='center', va='bottom', fontweight='bold')
 
     autolabel(rects1)
     autolabel(rects2)
     
     plt.tight_layout()
-    plot_path = os.path.join(save_path, 'success_rate_comparison.png')
+    plot_path = os.path.join(save_path, 'success_rate_extrapolation.png')
     plt.savefig(plot_path, dpi=300)
     print(f"Bar chart saved to {plot_path}")
 
 def calculate_continuous_errors_and_plot(load_path, save_path, full_dataset, norm_stats, model, args, device='cpu'):
     print("\n--- CALCULATING CONTINUOUS ERRORS (CM) & PLOTTING ---")
 
-    Y_min_vals, Y_max_vals, C_min_val, C_max_val = norm_stats['Y_min'], norm_stats['Y_max'], norm_stats['C_min'], norm_stats['C_max']
-    
+    Y_min_vals, Y_max_vals = norm_stats['Y_min'].to(device), norm_stats['Y_max'].to(device)
     time_len = full_dataset.time_len
-
-    # Move bounds to device for denormalization
-    Y_min_vals = Y_min_vals.to(device)
-    Y_max_vals = Y_max_vals.to(device)
-
-    # Setup Data Structures
-    metrics = ['Euclidean (3D)', 'X-Axis (Left/Right)', 'Y-Axis (Forward/Back)', 'Z-Axis (Depth)']
-    start_errors = {m: {} for m in metrics}
-    end_errors = {m: {} for m in metrics}
-
+    
     # Load the hidden test indices
     test_idx = np.load(os.path.join(load_path, 'test_indices.npy' if not args.fine_tuned else 'finetuning_test_indices.npy'))
     print(f"Evaluating continuous errors on {len(test_idx)} test samples...")
     
     x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1)
 
-    # Run Inference Loop
-    for i in test_idx:
-        # Grab the full Forward Trajectory
-        y1_seq = full_dataset.Y1[i].unsqueeze(0).to(device)
-        
-        # Grab the Inverse Trajectory
-        y2_seq = full_dataset.Y2[i].unsqueeze(0).to(device)
-        
-        # Context
-        curr_context = full_dataset.C[i].view(1, 1, -1).to(device)
+    metrics = ['Euclidean (3D)', 'X-Axis (Left/Right)', 'Y-Axis (Forward/Back)', 'Z-Axis (Depth)']
+    groups = ['Left Side (Seen)', 'Right Side (Zero-Shot)']
+    
+    start_errors = {m: {g: [] for g in groups} for m in metrics}
+    end_errors = {m: {g: [] for g in groups} for m in metrics}
 
-        # Condition points
-        condition_points = [0, -1] # t=0 and t=1 of the inverse trajectory corresponds to indices 0 and 199 (since time_len=200)
-        eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
-        eval_mask[0, condition_points] = False # Set condition points to False (Observed)
+    for i in test_idx:
+        y1_seq = full_dataset.Y1[i].unsqueeze(0).to(device)
+        y2_seq = full_dataset.Y2[i].unsqueeze(0).to(device)
+        curr_context = full_dataset.C[i].view(1, 1, -1).to(device)
+        is_seen = full_dataset.valid_inverses[i]
+        group_key = groups[0] if is_seen else groups[1]
+
+        condition_points = [0, -1] 
+        eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device)
+        eval_mask[0, condition_points] = False 
         
         # Run Inference
         with torch.no_grad():
             if args.model.startswith('cnmp'):
-                # Prepare Condition
-                cond_pts = []
-                for idx in condition_points:
-                    cond_pts.append([x_full[0, idx], y2_seq[0, idx]])
-
-                means_norm, _ = model_predict.predict_inverse_inverse(model, time_len, curr_context, cond_pts, full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, device=device)
-                pred_seq = means_norm
+                cond_pts = [[x_full[0, idx], y2_seq[0, idx]] for idx in condition_points]
+                pred_seq, _ = model_predict.predict_inverse_inverse(model, time_len, curr_context, cond_pts, full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, device=device)
             elif args.model.startswith('temp'):
                 output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=2, mask_indices_2=eval_mask)
-                # Extract the Predicted Inverse Trajectory
-                _, _, pred_mean_i, _ = output.chunk(4, dim=-1)
-                pred_seq = pred_mean_i
+                _, _, pred_seq, _ = output.chunk(4, dim=-1)
             elif args.model.startswith('tedp'):
                 pred_seq = model.sample(cond_seq=y2_seq, params=curr_context, mask_indices=eval_mask, source_dim='y2', target_dim='y2', time_len=time_len)
         
-        # Denormalize Predictions and Ground Truth to physical scale
         pred_traj = denormalize_data(pred_seq.squeeze(0), Y_min_vals, Y_max_vals).cpu().numpy()
         gt_traj = denormalize_data(full_dataset.Y2[i].to(device), Y_min_vals, Y_max_vals).cpu().numpy()
         
-        # Identify Object Type dynamically via Context ID
-        curr_context_norm = full_dataset.C[i]
-        raw_id = denormalize_data(curr_context_norm, C_min_val, C_max_val)[-1].item()
-        
-        obj_key = None
-        min_diff = float('inf')
-        for key, config in full_dataset.object_config.items():
-            diff = abs(config['id'] - raw_id)
-            if diff < min_diff:
-                min_diff = diff
-                obj_key = key
-        
-        if obj_key not in start_errors['Euclidean (3D)']:
-            for m in metrics:
-                start_errors[m][obj_key] = []
-                end_errors[m][obj_key] = []
-                
         # Calculate Differences in cm
         diff_start = (pred_traj[0, :3] - gt_traj[0, :3]) * 100.0
         diff_end = (pred_traj[-1, :3] - gt_traj[-1, :3]) * 100.0
         
-        start_errors['Euclidean (3D)'][obj_key].append(np.linalg.norm(diff_start))
-        start_errors['X-Axis (Left/Right)'][obj_key].append(abs(diff_start[0]))
-        start_errors['Y-Axis (Forward/Back)'][obj_key].append(abs(diff_start[1]))
-        start_errors['Z-Axis (Depth)'][obj_key].append(abs(diff_start[2]))
+        start_errors['Euclidean (3D)'][group_key].append(np.linalg.norm(diff_start))
+        start_errors['X-Axis (Left/Right)'][group_key].append(abs(diff_start[0]))
+        start_errors['Y-Axis (Forward/Back)'][group_key].append(abs(diff_start[1]))
+        start_errors['Z-Axis (Depth)'][group_key].append(abs(diff_start[2]))
         
-        end_errors['Euclidean (3D)'][obj_key].append(np.linalg.norm(diff_end))
-        end_errors['X-Axis (Left/Right)'][obj_key].append(abs(diff_end[0]))
-        end_errors['Y-Axis (Forward/Back)'][obj_key].append(abs(diff_end[1]))
-        end_errors['Z-Axis (Depth)'][obj_key].append(abs(diff_end[2]))
+        end_errors['Euclidean (3D)'][group_key].append(np.linalg.norm(diff_end))
+        end_errors['X-Axis (Left/Right)'][group_key].append(abs(diff_end[0]))
+        end_errors['Y-Axis (Forward/Back)'][group_key].append(abs(diff_end[1]))
+        end_errors['Z-Axis (Depth)'][group_key].append(abs(diff_end[2]))
 
-    # Helper function to plot a set of 4 Violins using Seaborn
     def create_violin_figure(error_data, time_title, filename):
-        evaluated_obj_keys = list(error_data['Euclidean (3D)'].keys())
-        
-        # Map object keys to their label with the (n=X) count included
-        label_map = {k: f"{full_dataset.object_config[k]['label']} (n={len(error_data['Euclidean (3D)'][k])})" for k in evaluated_obj_keys}
-        
-        # Convert the dictionary into a Pandas DataFrame for Seaborn
         rows = []
         for m in metrics:
-            for k in evaluated_obj_keys:
-                obj_label = label_map[k]
-                for val in error_data[m][k]:
-                    rows.append({'Metric': m, 'Object': obj_label, 'Error (cm)': val})
+            for g in groups:
+                for val in error_data[m][g]:
+                    rows.append({'Metric': m, 'Domain': g, 'Error (cm)': val})
         df = pd.DataFrame(rows)
 
         # Save the error data for further plotting
         csv_filename = filename.replace('.png', '.csv')
         df.to_csv(os.path.join(save_path, csv_filename), index=False)
         
-        fig, axes = plt.subplots(4, 1, figsize=(14, 18))
-        fig.suptitle(f'Trajectory {time_title} Deviation', fontsize=18, fontweight='bold', y=0.98)
+        fig, axes = plt.subplots(4, 1, figsize=(10, 16))
+        fig.suptitle(f'Trajectory {time_title} Deviation\nExtrapolation Check', fontsize=16, fontweight='bold', y=0.98)
 
         for idx, m in enumerate(metrics):
             ax = axes[idx]
             df_metric = df[df['Metric'] == m]
-            
-            # Seaborn Violin Plot
             sns.violinplot(
                 data=df_metric, 
-                x='Object', 
+                x='Domain', 
                 y='Error (cm)', 
-                ax=ax,
-                color='#5bc0de',
-                linewidth=1.5,
-                inner='box',
+                ax=ax, 
+                hue='Domain',
+                palette=['#5bc0de', '#d9534f'], 
+                inner='box', 
+                legend=False,
                 cut=0,   # Prevent the violin from drawing density below 0 cm
                 density_norm='width'
             )
-            
             ax.set_title(m, fontsize=14, fontweight='bold')
             ax.set_ylabel('Error (cm)', fontsize=12, fontweight='bold')
-            ax.set_xlabel('') # Clear redundant x-axis label
-            
-            # Only show object names on the very bottom plot
-            if idx == 3:
-                ax.set_xticklabels(ax.get_xticklabels(), fontsize=10, fontweight='bold', rotation=45, ha='right')
-            else:
-                ax.set_xticklabels([])
-                
+            ax.set_xlabel('') 
             ax.grid(axis='y', linestyle='--', alpha=0.5)
 
-        plt.tight_layout(rect=[0, 0, 1, 0.97]) 
+        plt.tight_layout(rect=[0, 0, 1, 0.96]) 
         plot_path = os.path.join(save_path, filename)
         plt.savefig(plot_path, dpi=300)
         print(f"Saved: {plot_path}")
 
-    # Helper function to calculate and save numerical statistics
-    def save_numerical_statistics(error_data, time_title, filename):
-        print(f"\n=== Numerical Statistics: {time_title} ===")
-        stats_file_path = os.path.join(save_path, filename)
-        
-        with open(stats_file_path, 'w') as f:
-            for m in metrics:
-                header = f"\n--- {m} ---"
-                print(header)
-                f.write(header + "\n")
-                
-                evaluated_obj_keys = list(error_data[m].keys())
-                for k in evaluated_obj_keys:
-                    err_list = error_data[m][k]
-                    if len(err_list) == 0:
-                        continue
-                        
-                    mean_val = np.mean(err_list)
-                    std_val = np.std(err_list)
-                    
-                    # Use the raw object name from object_config, plus (n=X)
-                    obj_label = f"{full_dataset.object_config[k]['label']} (n={len(err_list)})"
-                    line = f"{obj_label:<35} | Mean: {mean_val:>5.2f} cm | Std: {std_val:>5.2f} cm"
-                    
-                    print(line)
-                    f.write(line + "\n")
-                    
-        print(f"\nStatistics saved to {stats_file_path}")
-
-    # Generate the two separate figure files
-    print("\nGenerating Seaborn Violin Plots...")
-    create_violin_figure(start_errors, "Start Point (t=0)", 'continuous_error_violins_start.png')
-    create_violin_figure(end_errors, "End Point (t=1)", 'continuous_error_violins_end.png')
-
-    # Generate and save the numerical statistics
-    save_numerical_statistics(start_errors, "Start Point (t=0)", 'continuous_errors_stats_start.txt')
-    save_numerical_statistics(end_errors, "End Point (t=1)", 'continuous_errors_stats_end.txt')
+    create_violin_figure(start_errors, "Start Point (t=0)", 'continuous_error_violins_start_extrap.png')
+    create_violin_figure(end_errors, "End Point (t=1)", 'continuous_error_violins_end_extrap.png')
 
 def predict_random_trajectories(load_path, save_path, full_dataset, Y2_raw, norm_stats, model, args, num_samples=6, device='cpu'):
     print(f"\n--- PREDICTING RANDOM TRAJECTORIES ({num_samples} samples) ---")
 
-    Y_min_vals, Y_max_vals, C_min_val, C_max_val = norm_stats['Y_min'], norm_stats['Y_max'], norm_stats['C_min'], norm_stats['C_max']
-
+    Y_min_vals, Y_max_vals = norm_stats['Y_min'].to(device), norm_stats['Y_max'].to(device)
+    C_min_val, C_max_val = norm_stats['C_min'].to(device), norm_stats['C_max'].to(device)
     time_len = full_dataset.time_len
 
-    # Move bounds to device for denormalization
-    Y_min_vals = Y_min_vals.to(device)
-    Y_max_vals = Y_max_vals.to(device)
-
-    # Load test indices and sample from them
-    test_idx = np.load(os.path.join(load_path, 'test_indices.npy' if not args.fine_tuned else 'finetuning_test_indices.npy'))
-    test_idx_list = test_idx.tolist()
+    test_idx = np.load(os.path.join(load_path, 'test_indices.npy' if not args.fine_tuned else 'finetuning_test_indices.npy')).tolist()
     
-    num_to_plot = min(num_samples, len(test_idx_list))
-    indices = random.sample(test_idx_list, num_to_plot)
+    # Stratified Sampling: Grab half from Seen, half from Zero-Shot if possible
+    seen_idx = [i for i in test_idx if full_dataset.valid_inverses[i]]
+    unseen_idx = [i for i in test_idx if not full_dataset.valid_inverses[i]]
     
-    # Target time steps (Full Sequence)
+    sample_seen = random.sample(seen_idx, min(len(seen_idx), num_samples//2))
+    sample_unseen = random.sample(unseen_idx, min(len(unseen_idx), num_samples - len(sample_seen)))
+    indices = sample_seen + sample_unseen
+    num_to_plot = len(indices)
+    
     time_steps = np.linspace(0, 1, time_len)
     x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1)
 
@@ -553,59 +391,42 @@ def predict_random_trajectories(load_path, save_path, full_dataset, Y2_raw, norm
         if num_to_plot == 1: axes = np.expand_dims(axes, 0) 
 
         for row_idx, traj_idx in enumerate(indices):
-            # Identify Object Type dynamically via Context ID
-            curr_context_norm = full_dataset.C[traj_idx]
-            raw_id = denormalize_data(curr_context_norm, C_min_val, C_max_val)[-1].item()
+            # 1. Denormalize the Task Parameter to display the actual Goal Coordinates
+            curr_context = full_dataset.C[traj_idx].view(1, 1, -1).to(device)
+            denorm_context = denormalize_data(curr_context.squeeze(), C_min_val, C_max_val).cpu().numpy()
+            goal_x, goal_y = denorm_context[0], denorm_context[1]
             
-            curr_obj_name = "Unknown"
-            min_diff = float('inf')
-            for key, config in full_dataset.object_config.items():
-                diff = abs(config['id'] - raw_id)
-                if diff < min_diff:
-                    min_diff = diff
-                    curr_obj_name = config['label']
+            is_seen = full_dataset.valid_inverses[traj_idx]
+            domain_label = "Seen Domain" if is_seen else "Zero-Shot Extrapolation"
+            curr_obj_name = f"Goal:\nX={goal_x:.2f}, Y={goal_y:.2f}\n({domain_label})"
             
-            # --- Prepare Ground Truth ---
-            curr_y_truth_raw = Y2_raw[traj_idx].numpy() # Place Action (Inverse)
-            
-            # --- Prepare Sequences ---
+            curr_y_truth_raw = Y2_raw[traj_idx].numpy()
             y1_seq = full_dataset.Y1[traj_idx].unsqueeze(0).to(device)
             y2_seq = full_dataset.Y2[traj_idx].unsqueeze(0).to(device)
-            curr_context = full_dataset.C[traj_idx].view(1, 1, -1).to(device)
 
-            # --- Run Inference ---
             samples = []
             with torch.no_grad():
                 if mode['p'] == 1:
                     # Condition on the Forward Trajectory
-                    condition_points = [60] # t=0.3 of the forward trajectory corresponds to index 60 (since time_len=200)
-                    eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
-                    eval_mask[0, condition_points] = False # Set condition points to False (Observed)
+                    condition_points = [60]
+                    eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) 
+                    eval_mask[0, condition_points] = False 
 
                     if args.model.startswith('cnmp'):
-                        # Prepare Condition
-                        cond_pts = []
-                        for idx in condition_points:
-                            cond_pts.append([x_full[0, idx], y1_seq[0, idx]])
-
+                        cond_pts = [[x_full[0, idx], y1_seq[0, idx]] for idx in condition_points]
                         pred_mean_i_norm, pred_std_i_norm = model_predict.predict_inverse(model, time_len, curr_context, cond_pts, full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, device=device)
                     elif args.model.startswith('temp'):
                         output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=mode['p'], mask_indices_1=eval_mask) # The p=mode['p'] parameter forces the decoder to use the correct latent vector
                         _, _, pred_mean_i_norm, pred_std_i_norm = output.chunk(4, dim=-1) # Extract the Inverse Trajectory predictions (Mean and Log-Variance)
                         pred_std_i_norm = torch.log(1 + torch.exp(pred_std_i_norm)) # Convert log variance parameter to standard deviation
-
-                        pred_mean_i_norm = pred_mean_i_norm.squeeze(0)
-                        pred_std_i_norm = pred_std_i_norm.squeeze(0)
+                        pred_mean_i_norm, pred_std_i_norm = pred_mean_i_norm.squeeze(0), pred_std_i_norm.squeeze(0)
                     elif args.model.startswith('tedp'):
-                        num_mc_samples = 6 # Number of diffusion generations for uncertainty estimation
+                        num_mc_samples = 6 
                         for _ in range(num_mc_samples):
                             pred = model.sample(cond_seq=y1_seq, params=curr_context, mask_indices=eval_mask, source_dim='y1', target_dim='y2', time_len=time_len)
                             samples.append(pred.squeeze(0))
-
-                        # Calculate Empirical Mean and Standard Deviation across the 10 samples
-                        samples_tensor = torch.stack(samples) # Shape: (10, 200, 3)
-                        pred_mean_i_norm = samples_tensor.mean(dim=0)
-                        pred_std_i_norm = samples_tensor.std(dim=0)
+                        samples_tensor = torch.stack(samples)
+                        pred_mean_i_norm, pred_std_i_norm = samples_tensor.mean(dim=0), samples_tensor.std(dim=0)
                 else:
                     # Condition on Inverse Trajectory
                     condition_points = [0, -1] 
@@ -613,30 +434,21 @@ def predict_random_trajectories(load_path, save_path, full_dataset, Y2_raw, norm
                     eval_mask[0, condition_points] = False 
 
                     if args.model.startswith('cnmp'):
-                        # Prepare Condition
-                        cond_pts = []
-                        for idx in condition_points:
-                            cond_pts.append([x_full[0, idx], y2_seq[0, idx]])
-
+                        cond_pts = [[x_full[0, idx], y2_seq[0, idx]] for idx in condition_points]
                         pred_mean_i_norm, pred_std_i_norm = model_predict.predict_inverse_inverse(model, time_len, curr_context, cond_pts, full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, device=device)
                     elif args.model.startswith('temp'):
                         output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=mode['p'], mask_indices_2=eval_mask)
                         _, _, pred_mean_i_norm, pred_std_i_norm = output.chunk(4, dim=-1) # Extract the Inverse Trajectory predictions (Mean and Log-Variance)
-                        pred_std_i_norm = torch.log(1 + torch.exp(pred_std_i_norm)) # Convert log variance parameter to standard deviation
-
-                        pred_mean_i_norm = pred_mean_i_norm.squeeze(0)
-                        pred_std_i_norm = pred_std_i_norm.squeeze(0)
+                        pred_std_i_norm = torch.log(1 + torch.exp(pred_std_i_norm)) 
+                        pred_mean_i_norm, pred_std_i_norm = pred_mean_i_norm.squeeze(0), pred_std_i_norm.squeeze(0)
                     elif args.model.startswith('tedp'):
                         num_mc_samples = 6
                         for _ in range(num_mc_samples):
                             pred = model.sample(cond_seq=y2_seq, params=curr_context, mask_indices=eval_mask, source_dim='y2', target_dim='y2', time_len=time_len)
                             samples.append(pred.squeeze(0))
+                        samples_tensor = torch.stack(samples) 
+                        pred_mean_i_norm, pred_std_i_norm = samples_tensor.mean(dim=0), samples_tensor.std(dim=0)
 
-                        # Calculate Empirical Mean and Standard Deviation across the 10 samples
-                        samples_tensor = torch.stack(samples) # Shape: (10, 200, 3)
-                        pred_mean_i_norm = samples_tensor.mean(dim=0)
-                        pred_std_i_norm = samples_tensor.std(dim=0)
-                
             # --- Denormalize Output ---
             if args.model.startswith('cnmp') or args.model.startswith('temp'):
                 # Denormalize means back to workspace coordinates
@@ -646,44 +458,34 @@ def predict_random_trajectories(load_path, save_path, full_dataset, Y2_raw, norm
                 y_range = (Y_max_vals - Y_min_vals).cpu().numpy()
                 stds_pred = pred_std_i_norm.cpu().numpy() * y_range
             elif args.model.startswith('tedp'):
-                # Denormalize means back to workspace coordinates
                 all_samples_pred = denormalize_data(samples_tensor, Y_min_vals, Y_max_vals).cpu().numpy()
-                
+
                 # Apply Savitzky-Golay Filter to smooth the DDPM wiggles on all samples
-                # window_length=15, polyorder=3 are standard values for 200-step trajectories
                 all_samples_smoothed = savgol_filter(all_samples_pred, window_length=15, polyorder=3, axis=1)
 
             # --- Plotting ---
             dim_labels = ["X (Place)", "Y (Place)", "Z (Place)"]
-            
             for col_idx in range(full_dataset.d_y2):
                 ax = axes[row_idx, col_idx]
-                
-                # Plot Ground Truth
-                ax.plot(time_steps, curr_y_truth_raw[:, col_idx], 
-                        color='black', linestyle='-', linewidth=2, alpha=0.5, label='GT (Place)')
+                ax.plot(time_steps, curr_y_truth_raw[:, col_idx], color='black', linestyle='-', linewidth=2, alpha=0.5, label='GT (Place)')
                 
                 if args.model.startswith('cnmp') or args.model.startswith('temp'):
                     # Prediction
-                    ax.plot(time_steps, means_pred[:, col_idx], 
-                            color='blue', linestyle='--', linewidth=2, label='Pred')
+                    ax.plot(time_steps, means_pred[:, col_idx], color='blue', linestyle='--', linewidth=2, label='Pred')
                     
                     # Uncertainty
                     sigma = stds_pred[:, col_idx]
                     mean_curve = means_pred[:, col_idx]
-                    ax.fill_between(time_steps, mean_curve - 2*sigma, mean_curve + 2*sigma, 
-                                    color='blue', alpha=0.1, label='Uncertainty')
+                    ax.fill_between(time_steps, mean_curve - 2*sigma, mean_curve + 2*sigma, color='blue', alpha=0.1, label='Uncertainty')
                 elif args.model.startswith('tedp'):
                     # Plot the "Uncertainty" Spaghetti (Background samples)
                     # We plot samples 1 through 9 with high transparency
                     for s_idx in range(1, num_mc_samples):
-                        ax.plot(time_steps, all_samples_smoothed[s_idx, :, col_idx], 
-                                color='blue', linestyle='-', linewidth=1, alpha=0.15)
-                    
+                        ax.plot(time_steps, all_samples_smoothed[s_idx, :, col_idx], color='blue', linestyle='-', linewidth=1, alpha=0.15)
+
                     # Plot the Primary Representative Sample (Sample 0)
                     # This ensures we see one continuous, un-flattened trajectory
-                    ax.plot(time_steps, all_samples_smoothed[0, :, col_idx], 
-                            color='blue', linestyle='--', linewidth=2, label='Pred (Primary)')
+                    ax.plot(time_steps, all_samples_smoothed[0, :, col_idx], color='blue', linestyle='--', linewidth=2, label='Pred (Primary)')
                 
                 # Condition Points
                 if mode['p'] == 2:
@@ -694,7 +496,7 @@ def predict_random_trajectories(load_path, save_path, full_dataset, Y2_raw, norm
                 if row_idx == 0:
                     ax.set_title(dim_labels[col_idx], fontsize=14, fontweight='bold')
                 if col_idx == 0:
-                    ax.set_ylabel(f"{curr_obj_name}\nPair {traj_idx}", fontsize=9, fontweight='bold')
+                    ax.set_ylabel(f"{curr_obj_name}\nPair {traj_idx}", fontsize=10, fontweight='bold')
 
                 ax.grid(True, alpha=0.3)
                 if row_idx == 0 and col_idx == 0:
@@ -732,7 +534,6 @@ if __name__ == "__main__":
         load_path = f"model/dual_cnmp_latent_alignment/save/{args.run_id}"
         from model.dual_cnmp_latent_alignment import dual_cnmp_model
         model = dual_cnmp_model.DualCNMP(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
-    
     elif args.model in ["temp_vanilla", "temp_unmasked_pooling", "temp_cls"]:
         load_path = f"model/transformer_encoded_movement_primitive/save/{args.run_id}"
         if args.model == "temp_vanilla":
@@ -744,7 +545,6 @@ if __name__ == "__main__":
         elif args.model == "temp_cls":
             from model.transformer_encoded_movement_primitive.cls_token import temp_model
             model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
-        
     elif args.model in ["tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"]:
         load_path = f"model/transformer_encoded_diffusion_policy/save/{args.run_id}"
         if args.model == "tedp_vanilla":
