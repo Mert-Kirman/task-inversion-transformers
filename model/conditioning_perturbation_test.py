@@ -57,11 +57,16 @@ def condition_perturbation_test(load_path, save_path, full_dataset, Y2_raw, norm
     C_max_val = C_max_val.to(device)
 
     # Load test indices and sample from them
-    test_idx = np.load(os.path.join(load_path, 'test_indices.npy' if not args.fine_tuned else 'finetuning_test_indices.npy'))
-    test_idx_list = test_idx.tolist()
+    test_idx = np.load(os.path.join(load_path, 'test_indices.npy' if not args.fine_tuned else 'finetuning_test_indices.npy')).tolist()
     
-    num_to_plot = min(args.num_samples, len(test_idx_list))
-    indices = random.sample(test_idx_list, num_to_plot)
+    # Stratified Sampling: Grab half from Seen, half from Zero-Shot if possible
+    seen_idx = [i for i in test_idx if full_dataset.valid_inverses[i]]
+    unseen_idx = [i for i in test_idx if not full_dataset.valid_inverses[i]]
+    
+    sample_seen = random.sample(seen_idx, min(len(seen_idx), args.num_samples//2))
+    sample_unseen = random.sample(unseen_idx, min(len(unseen_idx), args.num_samples - len(sample_seen)))
+    indices = sample_seen + sample_unseen
+    num_to_plot = len(indices)
     
     time_steps = np.linspace(0, 1, time_len)
     print(f"Evaluating indices: {indices}")
@@ -77,20 +82,17 @@ def condition_perturbation_test(load_path, save_path, full_dataset, Y2_raw, norm
     eval_mask[0, cond_step_indices] = False # False = Observed
 
     for row_idx, traj_idx in enumerate(indices):
-        # Identify Object Type
-        curr_context_norm = full_dataset.C[traj_idx]
-        raw_id = denormalize_data(curr_context_norm.to(device), C_min_val, C_max_val)[-1].item()
+        # --- Identify Spatial Domain and Goal Coordinates ---
+        curr_context = full_dataset.C[traj_idx].view(1, 1, -1).to(device)
+        denorm_context = denormalize_data(curr_context.squeeze(), C_min_val, C_max_val).cpu().numpy()
+        goal_x, goal_y = denorm_context[0], denorm_context[1]
         
-        curr_obj_name = "Unknown"
-        min_diff = float('inf')
-        for key, config in full_dataset.object_config.items():
-            if abs(config['id'] - raw_id) < min_diff:
-                min_diff = abs(config['id'] - raw_id)
-                curr_obj_name = config['label']
+        is_seen = full_dataset.valid_inverses[traj_idx]
+        domain_label = "Seen Domain" if is_seen else "Zero-Shot Extrapolation"
+        curr_obj_name = f"Goal:\nX={goal_x:.2f}, Y={goal_y:.2f}\n({domain_label})"
         
         # --- Prepare Ground Truth ---
         curr_y_truth_raw = Y2_raw[traj_idx].numpy() 
-        curr_context = full_dataset.C[traj_idx].view(1, 1, -1).to(device)
 
         # --- Prepare Perturbed Sequences ---
         y2_seq_orig = full_dataset.Y2[traj_idx].unsqueeze(0).to(device)
@@ -136,12 +138,10 @@ def condition_perturbation_test(load_path, save_path, full_dataset, Y2_raw, norm
                 if args.model.startswith('cnmp'):
                     # Extract just the [time, normalized_value] pair the model expects
                     model_cond = [[c["t"], normalize_data(torch.from_numpy(c["raw"]).to(device), Y_min_vals, Y_max_vals)] for c in cond_data["points"]]
-                    
                     pred_seq, _ = model_predict.predict_inverse_inverse(model, time_len, curr_context, model_cond, full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, device=device)
                 elif args.model.startswith('temp'):
                     x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1)
                     y1_seq = full_dataset.Y1[traj_idx].unsqueeze(0).to(device)
-                    
                     output, _, _, _ = model(y1_seq, cond_data["seq"], curr_context, x_full, extra_pass=False, p=2, mask_indices_2=eval_mask)
                     _, _, pred_seq, _ = output.chunk(4, dim=-1)
                     pred_seq = pred_seq.squeeze(0)
@@ -204,11 +204,8 @@ if __name__ == "__main__":
     args = parse_args()
     seed_everything(args.seed)
     
-    # Device configuration
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    if torch.cuda.is_available():
-        print(f"GPU: {torch.cuda.get_device_name(0)}")
 
     # Load Data
     if args.dataset == "reassemble":
@@ -259,15 +256,13 @@ if __name__ == "__main__":
     save_path = os.path.join(load_path, "pretrained" if not args.fine_tuned else "finetuned")
     os.makedirs(save_path, exist_ok=True)
 
-    # Load the best model checkpoint
-    checkpoint = torch.load(os.path.join(load_path, "best_model.pth"))
+    checkpoint = torch.load(os.path.join(load_path, "best_model.pth" if not args.fine_tuned else "finetuning_best_model.pth"))
     if args.model == "cnmp":
         model.load_state_dict(checkpoint)
     else:
         model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
-    # Normalize data
     if args.model == "cnmp":
         norm_stats = np.load(os.path.join(load_path, 'normalization_stats.npy'), allow_pickle=True).item()
     else:
