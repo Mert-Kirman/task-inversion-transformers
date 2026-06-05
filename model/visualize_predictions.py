@@ -102,15 +102,31 @@ def main():
     tedp.load_state_dict(torch.load(os.path.join(args.tedp_run, 'finetuning_best_model.pth' if args.fine_tuned else 'best_model.pth'), map_location=device)['model_state_dict'])
     tedp.eval()
 
-    # Filter to only paired test samples
-    paired_test_indices = [idx for idx in test_indices if dataset.valid_inverses[idx]]
-    selected_indices = np.random.choice(paired_test_indices, min(args.num_plots, len(paired_test_indices)), replace=False)
+    # ==========================================
+    # STRATIFIED SAMPLING (50% Seen, 50% Unseen)
+    # ==========================================
+    test_idx_list = test_indices.tolist()
+    seen_idx = [i for i in test_idx_list if dataset.valid_inverses[i]]
+    unseen_idx = [i for i in test_idx_list if not dataset.valid_inverses[i]]
+    
+    num_seen = min(len(seen_idx), args.num_plots // 2)
+    num_unseen = min(len(unseen_idx), args.num_plots - num_seen)
+    
+    sample_seen = list(np.random.choice(seen_idx, num_seen, replace=False))
+    sample_unseen = list(np.random.choice(unseen_idx, num_unseen, replace=False))
+    
+    selected_indices = sample_seen + sample_unseen
+    np.random.shuffle(selected_indices) # Shuffle so they save in a mixed order
 
-    print(f"Generating {len(selected_indices)} plots...")
+    print(f"Generating {len(selected_indices)} plots ({num_seen} Seen, {num_unseen} Zero-Shot)...")
 
     for plot_idx, sample_idx in enumerate(selected_indices):
         print(f"Processing Sample {plot_idx + 1}/{len(selected_indices)} (Dataset Index: {sample_idx})...")
         
+        # Determine Domain for Title
+        is_seen = dataset.valid_inverses[sample_idx]
+        domain_label = "Seen Domain" if is_seen else "Zero-Shot Extrapolation"
+
         # Extract and Normalize Data
         Y1 = dataset.Y1[sample_idx:sample_idx+1].to(device)
         Y2 = dataset.Y2[sample_idx:sample_idx+1].to(device)
@@ -131,7 +147,6 @@ def main():
             eval_mask[0, condition_points] = False 
 
             # --- 1. CNMP Inference ---
-            # Prepare Condition
             cond_pts = []
             for idx in condition_points:
                 cond_pts.append([x_full[0, idx], Y2_norm[0, idx]])
@@ -179,16 +194,18 @@ def main():
         ax.set_xlabel('X (meters)')
         ax.set_ylabel('Y (meters)')
         ax.set_zlabel('Z (meters)')
-        ax.set_title(f"Trajectory Inversion Comparison\nTest Sample #{sample_idx}")
+        ax.set_title(f"Trajectory Inversion Comparison\n{domain_label} - Test Sample #{sample_idx}")
         
         # Legend (place outside plot if it gets cluttered)
         ax.legend(loc='upper left', bbox_to_anchor=(1.05, 1), borderaxespad=0.)
         
-        # Set stable view angle to see the table and the arc clearly
         ax.view_init(elev=20, azim=45)
 
         plt.tight_layout()
-        save_path = os.path.join(save_folder, f"comparison_sample_{sample_idx}.png")
+        
+        # Label the file name so you know which domain it belongs to
+        file_prefix = "seen" if is_seen else "unseen"
+        save_path = os.path.join(save_folder, f"comparison_{file_prefix}_sample_{sample_idx}.png")
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
 
