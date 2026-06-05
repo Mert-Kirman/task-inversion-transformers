@@ -202,12 +202,13 @@ def main():
         ax.view_init(elev=20, azim=45)
 
         plt.tight_layout()
+        plt.show()
         
-        # Label the file name so you know which domain it belongs to
-        file_prefix = "seen" if is_seen else "unseen"
-        save_path = os.path.join(save_folder, f"comparison_{file_prefix}_sample_{sample_idx}.png")
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
+        # # Label the file name so you know which domain it belongs to
+        # file_prefix = "seen" if is_seen else "unseen"
+        # save_path = os.path.join(save_folder, f"comparison_{file_prefix}_sample_{sample_idx}.png")
+        # plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        # plt.close()
 
     print(f"\nAll plots saved to '{save_folder}'.")
 
