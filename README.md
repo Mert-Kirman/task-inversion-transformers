@@ -1,38 +1,25 @@
-# Task Parameter Extrapolation for Robotic Assembly (Dual-CNMP)
+# Task Parameter Extrapolation in Task Inversion Applied on REASSEMBLE Dataset
 
 [![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![Status](https://img.shields.io/badge/Status-Active_Research-yellow.svg?style=for-the-badge)]()
-
-
-## Spring 2026 Extension
-
-The current Dual-CNMP implementation serves as the baseline. The next phase of research focuses on introducing: Diffusion Models and Transformer Architectures.
+[![Status](https://img.shields.io/badge/Status-Completed-success.svg?style=for-the-badge)]()
 
 ## Project Overview
 
-This repository contains the PyTorch implementation of a **Dual-Conditional Neural Movement Primitive (Dual-CNMP)** framework applied to the **REASSEMBLE dataset**.
+This repository contains the PyTorch implementations of advanced generative models (**CNMP**, **TEMP**, and **TEDP**) applied to the **REASSEMBLE dataset**. 
 
-The goal of this project is to solve the **Task Inversion** problem:
-1.  **Train** a robot to perform both `Insert` and `Place` tasks for a known object (Round Peg).
-2.  **Extrapolate** the `Place` skill to a **novel object** (Square Peg) for which the robot has *only* seen the `Insert` demonstration.
-3.  **Achieve Zero-Shot Generalization** where the model generates a valid "return-to-origin" trajectory without ever training on the inverse task for the target object.
+The goal of this project is to solve the **Robotic Task Inversion** problem:
+1.  **Observe** an `Insert` trajectory (Forward Pass).
+2.  **Generate** a corresponding `Place` trajectory (Inverse Pass) returning the object to its base.
+3.  **Achieve Zero-Shot Spatial Extrapolation:** Generate valid, physically accurate inverse trajectories for entirely unseen spatial locations in the workspace.
 
-Key contributions include a custom **end-to-end data pipeline** for multimodal sensor synchronization and a **geometric relativization strategy** to enforce closed-loop spatial consistency.
+While previous work relied on categorical object IDs, I discovered that 3D end-effector trajectories represent coarse macroscopic movements where specific object IDs lack meaningful dynamic information. Therefore, I redefined the "Task Parameter" to be the continuous **Spatial Goal Configuration (X, Y socket coordinates)**. 
+
+Models are trained exclusively on trajectories originating from the **Left Side** of the workspace, and are evaluated on their zero-shot ability to extrapolate the task to sockets located on the **Right Side** of the workspace.
 
 ---
 
-## Architecture & Methodology
-
-### 1. The Dual-CNMP Model
-This implementation utilizes a Dual-Encoder architecture that maps sensorimotor trajectories into a shared latent space.
-* **Encoder A (Forward):** Encodes the `Insert` trajectory.
-* **Encoder B (Inverse):** Encodes the `Place` trajectory.
-* **Shared Latent Space:** By forcing manifold alignment between these tasks, the model learns the semantic relationship between "Insert" and "Place" independent of the object identity.
-
-![Model Architecture](assets/dual_cnmp.png)
-
-### 2. Data Pipeline & Processing
+## Data Pipeline & Processing
 * **Dataset:** [REASSEMBLE Dataset](https://tuwien-asl.github.io/REASSEMBLE_page/) (Multimodal: Pose, Joints, Force).
 * **Trajectory Pairing:** Implemented the **Hungarian Algorithm** to minimize Euclidean distance between mismatched `Insert` end-points and `Place` start-points, creating valid semantic pairs from asynchronous data.
 
@@ -48,22 +35,68 @@ This implementation utilizes a Dual-Encoder architecture that maps sensorimotor 
 
 ---
 
-## Results
+## Architecture Evolution & Diagnosing Bottlenecks
 
-The model is evaluated using a **Rigorous Geometric Success Criterion** based on a Dual-Point Constraint. A generated trajectory is considered successful only if it satisfies **both** conditions simultaneously:
-1.  **Start Point Accuracy:** The trajectory must initiate from the correct socket location (verifying the model recognized the object context).
-2.  **End Point Convergence:** The trajectory must converge to the table origin (verifying the model learned the "return-to-start" logic).
+![Unified Dual Architecture Diagram](assets/dual_encoder_decoder.png)
+> *The Unified Dual-Encoder-Decoder Architecture. Observed sequence elements (𝐴1...𝐴𝑛 and 𝐵1...𝐵𝑛) are processed to
+form a unified latent representation 𝑟, utilizing either average-pooling (CNMP) or [CLS] token extraction (TEMP/TEDP). The
+latent vector 𝑟 is concatenated with the Task Parameter (𝑒𝛹) and a Query/Time condition (Target time for CNMP/TEMP;
+Denoising step for TEDP) to generate the final trajectory prediction.*
 
-Both points must fall within a strict spatial threshold (10% of workspace bounds) for the trial to count as a success.
+To evaluate sequence generation capabilities, I expanded beyond the baseline CNMP model to include state-of-the-art architectures:
 
-| Object (Task) | Condition | Success Rate (10% Tolerance) |
-| :--- | :--- | :--- |
-| **Round Peg** | Known (Paired) | **100.0%** |
-| **Square Peg** | **Unseen (Zero-Shot)** | **62.5%** |
+### 1. CNMP (Conditional Neural Movement Primitives)
+Baseline architecture that encodes continuous coordinates independently.
 
-> **Key Finding:** The model successfully extrapolated the closed-loop task logic to the Square Peg. It generated a valid trajectory that correctly identified the **novel socket location** and returned the object to the origin, despite never seeing a "Place" demonstration for this specific geometry.
+### 2. TEMP (Transformer Encoded Movement Primitive)
+Replaces the point-based encoder with a Transformer. 
+* **The "Blurry Attention" Discovery:** Initial perturbation tests revealed a critical flaw: TEMP completely ignored spatial conditioning points, predicting the exact same trajectory regardless of conditioning input as long as they had similar task parameters. I hypothesized that average pooling across masked tokens blurred the continuous spatial information. 
+* **The Architectural Fix:** I engineered a variant replacing average pooling with a global `[CLS]` token, applying `src_key_padding_mask` natively to block attention to empty tokens, utilizing Pre-Layer Normalization, and lowering the learning rate. This successfully forced the Transformer to become highly responsive to spatial conditioning.
 
-![Extrapolation Results](assets/success_rate_comparison.png)
+### 3. TEDP (Transformer Encoded Diffusion Policy)
+Utilizes a U-Net based Denoising Diffusion Probabilistic Model (DDPM) guided by Classifier-Free Guidance (CFG). While standard diffusion variants (including Cross-Attention) struggled to map sparse conditions, TEDP represents the state-of-the-art in handling multimodal robotic generation when properly scaled.
+
+---
+
+## Overcoming Data Scarcity: The Sim2Real Pipeline
+
+Advanced generative architectures (Transformers/Diffusion) are notoriously data-hungry. The real-world REASSEMBLE dataset contains 860 total trajectories across 17 objects (after doing forward-inverse trajectory pairing using 'Insert' and 'Place' high level actions according to the last point of forward trajectory and start point of inverse trajectory), which created a severe bottleneck. 
+
+To stabilize these models, I implemented a **Sim2Real Transfer Pipeline**:
+1. **Synthetic Data Generation:** I developed a synthetic data generator that mimics the structural and spatial distribution of the real REASSEMBLE dataset. I tested the complexity of the synthetic domain and observed that error margins matched the real dataset closely on the 3 architectures.
+2. **Macro-Physics Pre-Training:** I generated a massive pre-training dataset of **34,000 synthetic samples**. Models were supervised pre-trained to learn generalized 3D spatial rules without memorizing noise.
+3. **Real-World Fine-Tuning:** Models were fine-tuned on the 860 real-world samples to adapt to real-life motions and noise.
+
+![Sim2Real Trajectory Comparison](assets/reassemble_vs_synthetic.png)
+> *REASSEMBLE (Left) vs Synthetic (Right) Datasets. Blue colored trajectories represent forward trajectories (Insert) while
+Orange colored trajectories represent inverse trajectories (Place). To prevent clutter only 100 random trajectories across 5 objects are
+plotted. Origin point (0, 0, 0) represents the start of forward and the end of inverse trajectories.*
+
+---
+
+## Extrapolation Results
+
+Models trained *from scratch* performed good on the Left Side of the board but suffered high variances when tested on the Right Side. The **Sim2Real pipeline successfully improved Zero-Shot Spatial Extrapolation**, drastically reducing errors in predicting the unseen extraction point (t=0 of inverse trajectory).
+
+| Architecture | Scratch Error (Unseen) | Finetuned Error (Unseen) | Improvement |
+| :--- | :--- | :--- | :--- |
+| **CNMP** | 9.0 cm | **4.2 cm** | **-53.3%** |
+| **TEMP (CLS)** | 6.1 cm | **5.3 cm** | **-13.1%** |
+| **TEDP (CFG)** | 12.4 cm | **6.7 cm** | **-45.9%** |
+
+> **Observation:** Fine-tuned models showed slightly *higher* errors on the training side (Left, seen domain) compared to scratch models (e.g., CNMP increased from 3.1 to 5.2 cm). I think this is because the models sacrificed minor seen domain accuracy to retain a robust, generalized spatial prior, improving inverse trajectory prediction performance during true extrapolation.
+
+### Performance Distributions
+
+![Start Point Error Bar Plot](assets/barplot_comparison_start.png)
+> *Mean Euclidean Error at Start Point (t=0) of Inverse Trajectory. The Finetuned models
+(red/purple/brown) maintain highly stable performance across both the Seen and Zero-Shot
+domains, proving successful spatial generalization.*
+
+![Start Point Error Violins](assets/violin_comparison_start_extrap.png)
+> *Error Distribution. Note the severe variance (tall distributions) in scratch TEDP
+and CNMP models on the right side (unseen domain), which is stabilized by the Sim2Real
+pipeline.*
 
 ---
 
@@ -71,14 +104,14 @@ Both points must fall within a strict spatial threshold (10% of workspace bounds
 
 This project requires **two separate environments** due to dependency conflicts with the original REASSEMBLE dataset tools.
 
-### 1. REASSEMBLE Environment (Only for high level data extraction)
+### 1. REASSEMBLE Environment (High Level Data Extraction)
 - Use this environment for data extraction (i.e., "choose_high_level_action.py").
 - Follow instructions from the REASSEMBLE repo to create "REASSEMBLE" conda environment.
 - [https://github.com/TUWIEN-ASL/REASSEMBLE](https://github.com/TUWIEN-ASL/REASSEMBLE)
 
 - **Note:** Once raw high level actions are extracted to .npy files (in "raw_high_level_actions" directory), you should switch back to the main "task-inversion" environment for all subsequent steps (pairing, training, etc.).
 
-### 2. Main Environment (For Preprocessing, Training, Evaluation)
+### 2. Main Environment (Preprocessing, Training, Evaluation)
 Use this environment for all other tasks including data preprocessing, model training, and evaluation.
 
 ```bash
@@ -162,9 +195,6 @@ task-inversion/
 │   ├── cluster_trajectories.py    # Trajectory clustering
 │   ├── warp_matched_trajectories.py # Dynamic time warping
 │   └── plot_*.py                  # Visualization scripts
-├── simulation/                     # Simulation and evaluation
-│   ├── traj_error_noisy_paired.py # Trajectory error analysis
-│   └── object_error_noisy_paired.py # Object placement error
 └── REASSEMBLE/                     # Data I/O utilities
     └── io.py
 ```
