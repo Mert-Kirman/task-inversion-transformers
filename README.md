@@ -133,7 +133,7 @@ conda activate task-inversion
 
 ### Data Preprocessing
 
-Extract desired action-object combinations
+Extract all action-object combinations from the Reassemble Dataset:
 
 ```bash
 python preprocessing/choose_high_level_action.py

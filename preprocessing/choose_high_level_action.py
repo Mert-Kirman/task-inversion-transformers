@@ -85,12 +85,6 @@ if __name__ == '__main__':
     h5_folder_path = f'data/original_reassemble_data/'
     available_files = [f for f in os.listdir(h5_folder_path) if f.endswith('.h5')]
 
-    # Desired action-object combination
-    action_object_combo = {
-        b'Pick round peg 4.': 'pick/round_peg_4', 
-        b'Pick square peg 4.': 'pick/square_peg_4'
-        }
-
     robot_state_sensor_names = ['compensated_base_force', 'compensated_base_torque', 'gripper_positions', 'joint_efforts', 
                                 'joint_positions', 'joint_velocities', 'measured_force', 'measured_torque', 'pose', 'velocity']
     
@@ -100,43 +94,55 @@ if __name__ == '__main__':
 
         segments_info = data.get('segments_info', None)
         for seg_key, seg_val in segments_info.items():
-            for desired_action, desired_action_folder_name in action_object_combo.items():
-                if seg_val.get('text') == desired_action and seg_val.get('success'):
-                    high_level_action_KEY = seg_key
-                    high_level_action = seg_val
-                    start, end = high_level_action.get('start'), high_level_action.get('end')
-                    
-                    robot_state_sensor_values = {}
-                    for sensor in robot_state_sensor_names:
-                        indexes = np.where((data['timestamps'][sensor] >= start) & (data['timestamps'][sensor] <= end))
-                        sensor_data = data['robot_state'][sensor][indexes]
-                        timestamps = data['timestamps'][sensor][indexes]
-                        robot_state_sensor_values[sensor] = (sensor_data, timestamps)
-                        print(f"{sensor}: {sensor_data.shape}")
-                    
-                    # Save robot state sensor values
-                    robot_state_output_dir = f'data/raw_high_level_actions/{desired_action_folder_name}'
-                    os.makedirs(robot_state_output_dir, exist_ok=True)
-                    file_name_trimmed = file_name.replace('.h5', '')
-                    np.save(f'{robot_state_output_dir}/{file_name_trimmed}_{high_level_action_KEY}.npy', robot_state_sensor_values)
+            if seg_val.get('text') != b'No action.' and seg_val.get('success'):
+                desired_action_word_list = seg_val.get('text').split()
+                desired_action_word_list = list(map(lambda x: x.decode('utf-8').strip(". ").lower() if isinstance(x, bytes) else x.strip(". ").lower(), desired_action_word_list))
 
-    # Save video segments for a specific file
-    target_files_for_video_extraction = [
-        "2025-01-10-15-34-33.h5",
-        ]
+                if desired_action_word_list[0] not in ['insert', 'place']:
+                    continue
+
+                desired_action_folder_name = f'{desired_action_word_list[0]}/{"_".join(desired_action_word_list[1:])}'
+
+                high_level_action_KEY = seg_key
+                high_level_action = seg_val
+                start, end = high_level_action.get('start'), high_level_action.get('end')
+                
+                robot_state_sensor_values = {}
+                for sensor in robot_state_sensor_names:
+                    indexes = np.where((data['timestamps'][sensor] >= start) & (data['timestamps'][sensor] <= end))
+                    sensor_data = data['robot_state'][sensor][indexes]
+                    timestamps = data['timestamps'][sensor][indexes]
+                    robot_state_sensor_values[sensor] = (sensor_data, timestamps)
+                    print(f"{sensor}: {sensor_data.shape}")
+                
+                # Save robot state sensor values
+                robot_state_output_dir = f'data/raw_high_level_actions/{desired_action_folder_name}'
+                os.makedirs(robot_state_output_dir, exist_ok=True)
+                file_name_trimmed = file_name.replace('.h5', '')
+                np.save(f'{robot_state_output_dir}/{file_name_trimmed}_{high_level_action_KEY}.npy', robot_state_sensor_values)
+
+    # # Save video segments for a specific file
+    # target_files_for_video_extraction = [
+    #     "2025-01-13-19-08-03.h5",
+    #     "2025-01-13-18-53-43.h5",
+    #     "2025-01-10-18-31-44.h5",
+    #     "2025-01-13-17-34-32.h5",
+    #     "2025-01-13-16-06-01.h5",
+    #     "2025-01-10-17-36-05.h5",
+    #     ]
     
-    for target_file_for_video_extraction in target_files_for_video_extraction:
-        if target_file_for_video_extraction in available_files:
-            print(f"\nExtracting video segments from {target_file_for_video_extraction}...")
-            h5_file_path = h5_folder_path + target_file_for_video_extraction
-            data = load_h5_file(h5_file_path, decode=False)
-            segments_info = data.get('segments_info', None)
-            for seg_key, seg_val in segments_info.items():
-                for desired_action, desired_action_folder_name in action_object_combo.items():
-                    if seg_val.get('text') == desired_action and seg_val.get('success'):
-                        high_level_action_KEY = seg_key
-                        high_level_action = seg_val
-                        start, end = high_level_action.get('start'), high_level_action.get('end')
+    # for target_file_for_video_extraction in target_files_for_video_extraction:
+    #     if target_file_for_video_extraction in available_files:
+    #         print(f"\nExtracting video segments from {target_file_for_video_extraction}...")
+    #         h5_file_path = h5_folder_path + target_file_for_video_extraction
+    #         data = load_h5_file(h5_file_path, decode=False)
+    #         segments_info = data.get('segments_info', None)
+    #         for seg_key, seg_val in segments_info.items():
+    #             for desired_action, desired_action_folder_name in action_object_combo.items():
+    #                 if seg_val.get('text') == desired_action and seg_val.get('success'):
+    #                     high_level_action_KEY = seg_key
+    #                     high_level_action = seg_val
+    #                     start, end = high_level_action.get('start'), high_level_action.get('end')
                         
-                        video_output_dir = f'data/videos/{target_file_for_video_extraction.replace(".h5","")}_{high_level_action_KEY}'
-                        save_video_segment(data, start, end, video_output_dir)
+    #                     video_output_dir = f'data/videos/{target_file_for_video_extraction.replace(".h5","")}_{high_level_action_KEY}'
+    #                     save_video_segment(data, start, end, video_output_dir)
