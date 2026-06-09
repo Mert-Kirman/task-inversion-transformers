@@ -8,14 +8,14 @@
 
 This repository contains the PyTorch implementations of advanced generative models (**CNMP**, **TEMP**, and **TEDP**) applied to the **REASSEMBLE dataset**. 
 
-The goal of this project is to solve the **Robotic Task Inversion** problem:
+The primary goal of this project is to achieve **Task Parameter Extrapolation** within the context of the robotic task inversion problem. Specifically, the framework is designed to:
 1.  **Observe** an `Insert` trajectory (Forward Pass).
 2.  **Generate** a corresponding `Place` trajectory (Inverse Pass) returning the object to its base.
-3.  **Achieve Zero-Shot Spatial Extrapolation:** Generate valid, physically accurate inverse trajectories for entirely unseen spatial locations in the workspace.
+3.  **Extrapolate to Unseen Tasks:** Generate valid, physically accurate inverse trajectories for entirely unseen spatial locations in the workspace by leveraging information learned from other tasks.
 
-While previous work relied on categorical object IDs, I discovered that 3D end-effector trajectories represent coarse macroscopic movements where specific object IDs lack meaningful dynamic information. Therefore, I redefined the "Task Parameter" to be the continuous **Spatial Goal Configuration (X, Y socket coordinates)**. 
+Initially, I relied on categorical object IDs for the task parameter. However, because 3D end-effector trajectories represent coarse macroscopic movements, specific object IDs lacked meaningful dynamic information. To achieve true task parameter extrapolation, I redefined the task parameter to be the continuous **Spatial Goal Configuration (X, Y socket coordinates)**. 
 
-Models are trained exclusively on trajectories originating from the **Left Side** of the workspace, and are evaluated on their zero-shot ability to extrapolate the task to sockets located on the **Right Side** of the workspace.
+During training, models are exclusively trained on paired trajectories where the socket is located on the **Left Side** of the workspace. During inference, they are evaluated on their zero-shot ability to extrapolate the task parameter and generate inverse trajectories for sockets located on the **Right Side** of the workspace.
 
 ---
 
@@ -45,27 +45,30 @@ Denoising step for TEDP) to generate the final trajectory prediction.*
 
 To evaluate sequence generation capabilities, I expanded beyond the baseline CNMP model to include state-of-the-art architectures:
 
-### 1. CNMP (Conditional Neural Movement Primitives)
-Baseline architecture that encodes continuous coordinates independently.
+### 1. CNMP (Conditional Neural Movement Primitives - Baseline)
+A neural architecture that processes continuous time and coordinate pairs to build a shared latent representation of the trajectory. Throughout my experiments, this baseline proved to be highly robust and yielded the lowest continuous errors for strict spatial precision tasks.
 
 ### 2. TEMP (Transformer Encoded Movement Primitive)
-Replaces the point-based encoder with a Transformer. 
-* **The "Blurry Attention" Discovery:** Initial perturbation tests revealed a critical flaw: TEMP completely ignored spatial conditioning points, predicting the exact same trajectory regardless of conditioning input as long as they had similar task parameters. I hypothesized that average pooling across masked tokens blurred the continuous spatial information. 
-* **The Architectural Fix:** I engineered a variant replacing average pooling with a global `[CLS]` token, applying `src_key_padding_mask` natively to block attention to empty tokens, utilizing Pre-Layer Normalization, and lowering the learning rate. This successfully forced the Transformer to become highly responsive to spatial conditioning.
+Replaces the encoder with a Transformer. 
+* **The Conditioning Discovery:** Initial perturbation tests revealed a critical flaw: TEMP completely ignored spatial conditioning points, predicting the exact same trajectory regardless of input. I hypothesized that average pooling across masked tokens blurred the continuous spatial information. 
+* **The Architectural Fix:** I tested an "unmasked pooling" variant which failed to solve the issue. I then engineered a variant replacing average pooling with a global `[CLS]` token, applying `src_key_padding_mask` natively to block attention to empty tokens, utilizing Pre-Layer Normalization, and lowering the learning rate. This successfully forced the Transformer to become responsive to spatial conditioning.
 
 ### 3. TEDP (Transformer Encoded Diffusion Policy)
-Utilizes a U-Net based Denoising Diffusion Probabilistic Model (DDPM) guided by Classifier-Free Guidance (CFG). While standard diffusion variants (including Cross-Attention) struggled to map sparse conditions, TEDP represents the state-of-the-art in handling multimodal robotic generation when properly scaled.
+Combines a Transformer encoder with a U-Net based diffusion model. 
+* **Variant Experiments:** Similar to TEMP, early versions of TEDP struggled to respond to conditioning points. I experimented with several variants: using cross-attention pooling (which failed and increased error) and unmasked pooling (which also failed). 
+* **The Final Architecture:** To resolve the conditioning bottleneck, I adopted the `[CLS]` token approach in the Transformer encoder (similar to the TEMP fix) and introduced **Classifier-Free Guidance (CFG)** to the diffusion process, which significantly improved continuous error values.
 
 ---
 
 ## Overcoming Data Scarcity: The Sim2Real Pipeline
 
-Advanced generative architectures (Transformers/Diffusion) are notoriously data-hungry. The real-world REASSEMBLE dataset contains 860 total trajectories across 17 objects (after doing forward-inverse trajectory pairing using 'Insert' and 'Place' high level actions according to the last point of forward trajectory and start point of inverse trajectory), which created a severe bottleneck. 
+Advanced generative architectures (Transformers/Diffusion) are notoriously data-hungry. The real-world REASSEMBLE dataset contains 860 total valid trajectories across 17 objects (obtained after performing forward-inverse trajectory pairing using 'Insert' and 'Place' high-level actions, matched according to the end point of the forward trajectory and the start point of the inverse trajectory). This limited sample size created a severe bottleneck for TEMP and TEDP.
 
 To stabilize these models, I implemented a **Sim2Real Transfer Pipeline**:
-1. **Synthetic Data Generation:** I developed a synthetic data generator that mimics the structural and spatial distribution of the real REASSEMBLE dataset. I tested the complexity of the synthetic domain and observed that error margins matched the real dataset closely on the 3 architectures.
-2. **Macro-Physics Pre-Training:** I generated a massive pre-training dataset of **34,000 synthetic samples**. Models were supervised pre-trained to learn generalized 3D spatial rules without memorizing noise.
-3. **Real-World Fine-Tuning:** Models were fine-tuned on the 860 real-world samples to adapt to real-life motions and noise.
+
+1. **Synthetic Data Generation:** I developed a synthetic data generator using Bezier curves and Gaussian distributions to approximate the bulk of the trajectories, bounded by the global 3D ranges (X, Y, Z) observed in the physical data. I tested the complexity of this synthetic domain using a small sample set and observed that the error margins across all 3 architectures closely matched the errors on the real dataset.
+2. **Macro-Physics Pre-Training:** I generated a massive pre-training dataset of **34,000 synthetic samples**. The models were supervised pre-trained on this dataset to learn generalized 3D spatial rules without memorizing dataset-specific noise.
+3. **Real-World Fine-Tuning:** The pretrained models were then fine-tuned on the 860 real-world samples to adapt to real-life motions and mechanical noise.
 
 ![Sim2Real Trajectory Comparison](assets/reassemble_vs_synthetic.png)
 > *REASSEMBLE (Left) vs Synthetic (Right) Datasets. Blue colored trajectories represent forward trajectories (Insert) while
@@ -74,9 +77,9 @@ plotted. Origin point (0, 0, 0) represents the start of forward and the end of i
 
 ---
 
-## Extrapolation Results
+## 📊 Extrapolation Results
 
-Models trained *from scratch* performed good on the Left Side of the board but suffered high variances when tested on the Right Side. The **Sim2Real pipeline successfully improved Zero-Shot Spatial Extrapolation**, drastically reducing errors in predicting the unseen extraction point (t=0 of inverse trajectory).
+Models trained *from scratch* performed well on the Left Side of the board but suffered high variances when tested on the Right Side. The **Sim2Real pipeline successfully improved Task Parameter Extrapolation**, drastically reducing errors in predicting the unseen extraction point (t=0 of the inverse trajectory).
 
 | Architecture | Scratch Error (Unseen) | Finetuned Error (Unseen) | Improvement |
 | :--- | :--- | :--- | :--- |
@@ -84,7 +87,7 @@ Models trained *from scratch* performed good on the Left Side of the board but s
 | **TEMP (CLS)** | 6.1 cm | **5.3 cm** | **-13.1%** |
 | **TEDP (CFG)** | 12.4 cm | **6.7 cm** | **-45.9%** |
 
-> **Observation:** Fine-tuned models showed slightly *higher* errors on the training side (Left, seen domain) compared to scratch models (e.g., CNMP increased from 3.1 to 5.2 cm). I think this is because the models sacrificed minor seen domain accuracy to retain a robust, generalized spatial prior, improving inverse trajectory prediction performance during true extrapolation.
+> **Observation:** Fine-tuned models showed slightly *higher* errors on the training side (Left, seen domain) compared to scratch models (e.g., CNMP increased from 3.1 cm to 5.2 cm). I believe this is because the models sacrificed minor seen-domain accuracy to retain a robust, generalized spatial prior, which ultimately improved inverse trajectory prediction performance during true extrapolation.
 
 ### Performance Distributions
 
@@ -155,17 +158,35 @@ python preprocessing/match_and_stack_trajectories.py
 ```
 
 ### Model Training
-To train the Dual-CNMP model on the paired (Round Peg) and auxiliary (Square Peg) data:
+To train a model, run the master training script with the desired argparse options:
 
 ```bash
-python model/insert_place_square_round_peg/train.py
+python model/train.py --model tedp_cfg --dataset reassemble
 ```
 
 ### Model Evaluation
-To test the Zero-Shot Extrapolation capabilities on the Square Peg:
+To test a trained model, run the master evaluation script with the desired argparse options:
 
 ```bash
-python model/insert_place_square_round_peg/evaluate_and_plot.py
+python model/evaluate.py --model tedp_cfg --dataset reassemble --run_id run_20260601_001323
+```
+
+### Conditioning Test
+To test whether a trained model responds to perturbations in the given conditions or not:
+```bash
+python model/conditioning_perturbation_test --model tedp_cfg --dataset reassemble --run_id run_20260601_001323
+```
+
+### Visualizing Model Predictions
+To visualize the inverse trajectories (seen + unseen domain) predicted by the trained models:
+```bash
+python model/visualize_predictions.py --num_plots 50
+```
+
+### Model Comparison Plots
+To create violin, box and bar plots for comparing the performances of trained models:
+```bash
+python model/compare_models.py --config model/compare_config.json
 ```
 
 ## Project Structure
