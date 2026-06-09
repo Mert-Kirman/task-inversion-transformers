@@ -4,7 +4,7 @@ import numpy as np
 import os
 
 class ReassembleDataset(Dataset):
-    def __init__(self, data_dir="data/paired_trajectories_insert_place"):
+    def __init__(self, data_dir):
         """
             X1, X2: Time vectors (N, time_len, 1)
             Y1, Y2: Forward and Inverse trajectories (N, time_len, d_y)
@@ -15,42 +15,63 @@ class ReassembleDataset(Dataset):
         # Mapping Object Name -> {Scalar ID, Paired Status}
         # 'paired': True  => Train on Forward AND Inverse
         # 'paired': False => Train on Forward ONLY (Mask Inverse)
-        self.object_config = {
-            # ==========================================
-            # PAIRED CATEGORIES (The Teachers)
-            # ==========================================
-            
-            # Category 1: Radially Symmetric 
-            'round_peg_1':  {'id': 0.0, 'paired': True,  'label': 'Round Peg 1'},
-            'round_peg_2':  {'id': 1.0, 'paired': True,  'label': 'Round Peg 2'},
-            'round_peg_3':  {'id': 2.0, 'paired': True,  'label': 'Round Peg 3'},
-            'round_peg_4':  {'id': 3.0, 'paired': True,  'label': 'Round Peg 4'},
-            
-            # Category 2: Meshing / Rotational
-            'small_gear':   {'id': 4.0, 'paired': True,  'label': 'Small Gear'},
-            'medium_gear':  {'id': 5.0, 'paired': True,  'label': 'Medium Gear'},
-            'large_gear':   {'id': 6.0, 'paired': True,  'label': 'Large Gear'},
-            
-            # Category 3: Asymmetric Connectors & Fasteners
-            'bnc':          {'id': 7.0, 'paired': True,  'label': 'BNC Connector'},
-            'bolt_4':       {'id': 8.0, 'paired': True,  'label': 'Bolt 4 / Nut'},
-            'd-sub':        {'id': 9.0, 'paired': True,  'label': 'D-SUB Connector'},
-            'ethernet':     {'id': 10.0, 'paired': True,  'label': 'Ethernet Connector'},
-            'waterproof':   {'id': 11.0, 'paired': True,  'label': 'Waterproof Connector'},
+        if "synthetic" not in data_dir:
+            self.object_config = {
+                # ==========================================
+                # PAIRED CATEGORIES (The Teachers)
+                # ==========================================
+                
+                # Category 1: Radially Symmetric 
+                'round_peg_1':  {'id': 0.0, 'paired': True,  'label': 'Round Peg 1'},
+                'round_peg_2':  {'id': 1.0, 'paired': True,  'label': 'Round Peg 2'},
+                'round_peg_3':  {'id': 2.0, 'paired': True,  'label': 'Round Peg 3'},
+                'round_peg_4':  {'id': 3.0, 'paired': True,  'label': 'Round Peg 4'},
+                
+                # Category 2: Meshing / Rotational
+                'small_gear':   {'id': 4.0, 'paired': True,  'label': 'Small Gear'},
+                'medium_gear':  {'id': 5.0, 'paired': True,  'label': 'Medium Gear'},
+                'large_gear':   {'id': 6.0, 'paired': True,  'label': 'Large Gear'},
+                
+                # Category 3: Asymmetric Connectors & Fasteners
+                'bnc':          {'id': 7.0, 'paired': True,  'label': 'BNC Connector'},
+                'bolt_4':       {'id': 8.0, 'paired': True,  'label': 'Bolt 4 / Nut'},
+                'd-sub':        {'id': 9.0, 'paired': True,  'label': 'D-SUB Connector'},
+                'ethernet':     {'id': 10.0, 'paired': True,  'label': 'Ethernet Connector'},
+                'waterproof':   {'id': 11.0, 'paired': True,  'label': 'Waterproof Connector'},
 
-            # ==========================================
-            # UNPAIRED CATEGORIES (Zero-Shot Targets)
-            # ==========================================
-            
-            # Zero-Shot Test 1: Corners & Edges (Highly Geometric, No Rotational Symmetry)
-            'square_peg_1': {'id': 12.0, 'paired': False, 'label': 'Square Peg 1 (Unpaired)'},
-            'square_peg_2': {'id': 13.0, 'paired': False, 'label': 'Square Peg 2 (Unpaired)'},
-            'square_peg_3': {'id': 14.0, 'paired': False, 'label': 'Square Peg 3 (Unpaired)'},
-            'square_peg_4': {'id': 15.0, 'paired': False, 'label': 'Square Peg 4 (Unpaired)'},
-            
-            # Zero-Shot Test 2: Highly Asymmetric Alien Shape
-            'usb':          {'id': 16.0, 'paired': False, 'label': 'USB Connector (Unpaired)'}
-        }
+                # ==========================================
+                # UNPAIRED CATEGORIES (Zero-Shot Targets)
+                # ==========================================
+                
+                # Zero-Shot Test 1: Corners & Edges (Highly Geometric, No Rotational Symmetry)
+                'square_peg_1': {'id': 12.0, 'paired': False, 'label': 'Square Peg 1 (Unpaired)'},
+                'square_peg_2': {'id': 13.0, 'paired': False, 'label': 'Square Peg 2 (Unpaired)'},
+                'square_peg_3': {'id': 14.0, 'paired': False, 'label': 'Square Peg 3 (Unpaired)'},
+                'square_peg_4': {'id': 15.0, 'paired': False, 'label': 'Square Peg 4 (Unpaired)'},
+                
+                # Zero-Shot Test 2: Highly Asymmetric Alien Shape
+                'usb':          {'id': 16.0, 'paired': False, 'label': 'USB Connector (Unpaired)'}
+            }
+        else:
+            self.object_config = {
+                'synthetic_obj_0': {'id': 0.0, 'paired': True,  'label': 'Synthetic Object 0'},
+                'synthetic_obj_1': {'id': 1.0, 'paired': True,  'label': 'Synthetic Object 1'},
+                'synthetic_obj_2': {'id': 2.0, 'paired': True,  'label': 'Synthetic Object 2'},
+                'synthetic_obj_3': {'id': 3.0, 'paired': True,  'label': 'Synthetic Object 3'},
+                'synthetic_obj_4': {'id': 4.0, 'paired': True,  'label': 'Synthetic Object 4'},
+                'synthetic_obj_5': {'id': 5.0, 'paired': True,  'label': 'Synthetic Object 5'},
+                'synthetic_obj_6': {'id': 6.0, 'paired': True,  'label': 'Synthetic Object 6'},
+                'synthetic_obj_7': {'id': 7.0, 'paired': True,  'label': 'Synthetic Object 7'},
+                'synthetic_obj_8': {'id': 8.0, 'paired': True,  'label': 'Synthetic Object 8'},
+                'synthetic_obj_9': {'id': 9.0, 'paired': False,  'label': 'Synthetic Object 9 (Unpaired)'},
+                'synthetic_obj_10': {'id': 10.0, 'paired': False,  'label': 'Synthetic Object 10 (Unpaired)'},
+                'synthetic_obj_11': {'id': 11.0, 'paired': False,  'label': 'Synthetic Object 11 (Unpaired)'},
+                'synthetic_obj_12': {'id': 12.0, 'paired': False,  'label': 'Synthetic Object 12 (Unpaired)'},
+                'synthetic_obj_13': {'id': 13.0, 'paired': True,  'label': 'Synthetic Object 13'},
+                'synthetic_obj_14': {'id': 14.0, 'paired': True,  'label': 'Synthetic Object 14'},
+                'synthetic_obj_15': {'id': 15.0, 'paired': False,  'label': 'Synthetic Object 15 (Unpaired)'},
+                'synthetic_obj_16': {'id': 16.0, 'paired': True,  'label': 'Synthetic Object 16'},
+            }
 
         # Lists to hold data from ALL objects
         all_Y1_list = []
@@ -82,11 +103,6 @@ class ReassembleDataset(Dataset):
             # Extract Trajectories (X, Y, Z)
             curr_Y1 = [d['pose'][0][:, :3] for d in insert_data] # Forward
             curr_Y2 = [d['pose'][0][:, :3] for d in place_data]  # Inverse
-
-            # Limit to top X matches PER OBJECT to keep balance
-            top_x_matched = min(50, len(curr_Y1))
-            curr_Y1 = curr_Y1[:top_x_matched]
-            curr_Y2 = curr_Y2[:top_x_matched]
             
             num_loaded = len(curr_Y1)
             print(f"    Loaded {num_loaded} trajectories.")
@@ -183,7 +199,18 @@ class ReassembleDataset(Dataset):
         }
 
 if __name__ == "__main__":
-    dataset = ReassembleDataset()
+    dataset = ReassembleDataset("data/paired_trajectories_insert_place")
+    loader = DataLoader(dataset, batch_size=16)
+    batch = next(iter(loader))
+    print(f'\nForward Trajectory Batch Shape: {batch["y1_seq"].shape}')
+    print(f'Inverse Trajectory Batch Shape: {batch["y2_seq"].shape}')
+    print(f'Context Batch Shape: {batch["context"].shape}')
+    print(f'X Target Batch Shape: {batch["x_tar"].shape}')
+    print(f'Forward Target Batch Shape: {batch["y_tar_f"].shape}')
+    print(f'Inverse Target Batch Shape: {batch["y_tar_i"].shape}')
+    print(f'Valid Inverse Batch Shape: {len(batch["is_valid_inverse"])}\n')
+
+    dataset = ReassembleDataset("data/synthetic_trajectories")
     loader = DataLoader(dataset, batch_size=16)
     batch = next(iter(loader))
     print(f'\nForward Trajectory Batch Shape: {batch["y1_seq"].shape}')

@@ -1,3 +1,4 @@
+import argparse
 import sys
 import os
 import torch
@@ -8,19 +9,27 @@ import seaborn as sns
 import random
 
 # Adjust path to find model modules
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from dataset import ReassembleDataset
-import model.transformer_encoded_movement_primitive.temp_model as temp_model
+import model.transformer_encoded_diffusion_policy.tedp_model as tedp_model
 import model.model_predict as model_predict
-import model.utils as utils
+from model.utils import seed_everything
 
-# ================= CONFIGURATION =================
-run_id = "run_20260408_204033"
-save_path = f"model/transformer_encoded_movement_primitive/save/{run_id}"
-# =================================================
+from scipy.signal import savgol_filter
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Evaluate CNMP/TEMP/TEDP models on Reassemble/Synthetic datasets.")
+    parser.add_argument("--model", type=str, required=True, choices=["cnmp", "temp_vanilla", "temp_unmasked_pooling", "temp_cls", "tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"], help="Which model architecture to evaluate.")
+    parser.add_argument("--dataset", type=str, required=True, choices=["reassemble", "synthetic_small", "synthetic_large"], help="Which dataset to evaluate on.")
+    parser.add_argument("--run_id", type=str, required=True, help="Identifier for the model run to load and evaluate.")
+    parser.add_argument("--fine_tuned", action='store_true', help="Perform evaluation on fine-tuned model.")
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
+
+    return args
 
 def normalize_data(Y1, Y2, C, Y_min_vals, Y_max_vals, C_min_val, C_max_val):
     """Normalize Y1, Y2, and C using global min-max normalization based on training data statistics."""
@@ -36,10 +45,10 @@ def denormalize_data(tensor, min_val, max_val):
     denominator = max_val - min_val
     return tensor * denominator + min_val
 
-def plot_grad_norms():
+def plot_grad_norms(load_path, save_path, args):
     """Plots the gradient norms over epochs if they exist."""
     try:
-        grad_norms = np.load(os.path.join(save_path, 'grad_norms.npy'))
+        grad_norms = np.load(os.path.join(load_path, 'grad_norms.npy' if not args.fine_tuned else 'finetuning_grad_norms.npy'))
         plt.figure(figsize=(8, 5))
         plt.plot(grad_norms, label='Gradient Norm')
         window_size = 20
@@ -57,16 +66,56 @@ def plot_grad_norms():
     except FileNotFoundError:
         print("Gradient norms log not found, skipping gradient norm plot.")
 
-def plot_training_progress():
+def plot_training_progress_cnmp(load_path, save_path, args):
     """Plots loss and error curves if they exist."""
     try:
-        composite_losses = np.load(f'{save_path}/composite_losses.npy')
-        
-        train_fwd_mse = np.load(f'{save_path}/train_fwd_mse.npy')
-        train_inv_mse = np.load(f'{save_path}/train_inv_mse.npy')
+        train_err = np.load(f'{load_path}/training_errors_mse.npy' if not args.fine_tuned else f'{load_path}/finetuning_training_errors_mse.npy')
+        val_err = np.load(f'{load_path}/validation_errors_mse.npy' if not args.fine_tuned else f'{load_path}/finetuning_validation_errors_mse.npy')
+        losses = np.load(f'{load_path}/losses_log_prob.npy' if not args.fine_tuned else f'{load_path}/finetuning_losses_log_prob.npy')
 
-        val_fwd_mse = np.load(f'{save_path}/val_fwd_mse.npy')
-        val_inv_mse = np.load(f'{save_path}/val_inv_mse.npy')
+        plt.figure(figsize=(15, 5))
+        
+        plt.subplot(1, 3, 1)
+        plt.plot(losses, label='Training Loss', color='orange', alpha=0.7)
+        plt.title('Log Probability Loss')
+        plt.xlabel('Step')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+
+        plt.subplot(1, 3, 2)
+        plt.plot(train_err, label='Train MSE', color='blue')
+        plt.plot(val_err, label='Val MSE', color='red', linestyle='--')
+        plt.title('Reconstruction Error (MSE)')
+        plt.xlabel('Epoch (x400)')
+        plt.ylabel('MSE')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        plt.subplot(1, 3, 3)
+        plt.plot(train_err, label='Train MSE', color='blue')
+        plt.plot(val_err, label='Val MSE', color='red', linestyle='--')
+        plt.title('MSE (Log Scale)')
+        plt.yscale('log')
+        plt.grid(True, alpha=0.3, which="both")
+
+        plt.tight_layout()
+        plot_save = f'{save_path}/training_progress_multi.png'
+        plt.savefig(plot_save)
+        print(f"Training progress saved to {plot_save}")
+        plt.close()
+    except FileNotFoundError:
+        print("Training logs not found, skipping progress plot.")
+
+def plot_training_progress_temp_tedp(load_path, save_path, args):
+    """Plots loss and error curves if they exist."""
+    try:
+        composite_losses = np.load(f'{load_path}/composite_losses.npy' if not args.fine_tuned else f'{load_path}/finetuning_composite_losses.npy')
+
+        train_fwd_mse = np.load(f'{load_path}/train_fwd_mse.npy' if not args.fine_tuned else f'{load_path}/finetuning_train_fwd_mse.npy')
+        train_inv_mse = np.load(f'{load_path}/train_inv_mse.npy' if not args.fine_tuned else f'{load_path}/finetuning_train_inv_mse.npy')
+
+        val_fwd_mse = np.load(f'{load_path}/val_fwd_mse.npy' if not args.fine_tuned else f'{load_path}/finetuning_val_fwd_mse.npy')
+        val_inv_mse = np.load(f'{load_path}/val_inv_mse.npy' if not args.fine_tuned else f'{load_path}/finetuning_val_inv_mse.npy')
 
         plt.figure(figsize=(15, 5))
 
@@ -108,23 +157,14 @@ def plot_training_progress():
     except FileNotFoundError:
         print("Training logs not found, skipping progress plot.")
 
-def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
+def calculate_success_rates_and_plot(load_path, save_path, full_dataset, norm_stats, model, args, device='cpu'):
     """
     Evaluates success based on Start (t=0) and End (t=1) point accuracy.
     Threshold: 5% (Strict) and 10% (Relaxed) of the global data range (per dimension).
     """
     print("\n--- CALCULATING SUCCESS RATES & PLOTTING ---")
 
-    # Load Data
-    full_dataset = ReassembleDataset(data_dir=base_data_folder)
-
-    # Load Normalization Stats
-    checkpoint = torch.load(os.path.join(save_path, "best_model.pth"))
-    norm_stats = checkpoint['norm_stats']
     Y_min_vals, Y_max_vals, C_min_val, C_max_val = norm_stats['Y_min'], norm_stats['Y_max'], norm_stats['C_min'], norm_stats['C_max']
-
-    # Normalize data
-    full_dataset.Y1, full_dataset.Y2, full_dataset.C = normalize_data(full_dataset.Y1, full_dataset.Y2, full_dataset.C, Y_min_vals, Y_max_vals, C_min_val, C_max_val)
     
     # Determine Thresholds
     global_range = Y_max_vals - Y_min_vals
@@ -137,24 +177,14 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
     
     print(f"Global Range (X, Y, Z): {global_range}")
     
-    # Data dimensions
-    d_x = full_dataset.d_x
-    d_y1 = full_dataset.d_y1
-    d_y2 = full_dataset.d_y2
-    d_param = full_dataset.d_param
     time_len = full_dataset.time_len
-
-    # Load Model
-    model = temp_model.TempModel(d_x, d_y1, d_y2, d_param).to(device)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
 
     # Move bounds to device for denormalization
     Y_min_vals = Y_min_vals.to(device)
     Y_max_vals = Y_max_vals.to(device)
 
     # Load the hidden test indices
-    test_idx = np.load(os.path.join(save_path, 'test_indices.npy'))
+    test_idx = np.load(os.path.join(load_path, 'test_indices.npy' if not args.fine_tuned else 'finetuning_test_indices.npy'))
 
     # Prepare the target time steps (all 200 points)
     x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1)
@@ -162,13 +192,13 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
     
     print("Running Zero-Shot Inference (Conditioning on start and end points of inverse trajectories)...")
     for i in test_idx:
-        # 1. Grab the full Forward Trajectory
+        # Grab the full Forward Trajectory
         y1_seq = full_dataset.Y1[i].unsqueeze(0).to(device)
         
-        # 2. Grab the Inverse Trajectory
+        # Grab the Inverse Trajectory
         y2_seq = full_dataset.Y2[i].unsqueeze(0).to(device)
         
-        # 3. Context
+        # Context
         curr_context = full_dataset.C[i].view(1, 1, -1).to(device)
 
         # Condition points
@@ -176,18 +206,29 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
         eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
         eval_mask[0, condition_points] = False # Set condition points to False (Observed)
         
-        # 4. Run Inference (p=2 forces Decoder to use L_I to generate Forward and Inverse trajectories)
+        # Run Inference
         with torch.no_grad():
-            output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=2, mask_indices_2=eval_mask)
-            
-        # 5. Extract the Predicted Inverse Trajectory
-        _, _, pred_mean_i, _ = output.chunk(4, dim=-1)
+            if args.model.startswith('cnmp'):
+                # Prepare Condition
+                cond_pts = []
+                for idx in condition_points:
+                    cond_pts.append([x_full[0, idx], y2_seq[0, idx]])
+
+                means_norm, _ = model_predict.predict_inverse_inverse(model, time_len, curr_context, cond_pts, full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, device=device)
+                pred_seq = means_norm
+            elif args.model.startswith('temp'):
+                output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=2, mask_indices_2=eval_mask)
+                # Extract the Predicted Inverse Trajectory
+                _, _, pred_mean_i, _ = output.chunk(4, dim=-1)
+                pred_seq = pred_mean_i
+            elif args.model.startswith('tedp'):
+                pred_seq = model.sample(cond_seq=y2_seq, params=curr_context, mask_indices=eval_mask, source_dim='y2', target_dim='y2', time_len=time_len)
         
-        # 6. Denormalize Predictions and Ground Truth to physical scale
-        pred_traj = denormalize_data(pred_mean_i.squeeze(0), Y_min_vals, Y_max_vals).cpu().numpy()
+        # Denormalize Predictions and Ground Truth to physical scale
+        pred_traj = denormalize_data(pred_seq.squeeze(0), Y_min_vals, Y_max_vals).cpu().numpy()
         gt_traj = denormalize_data(full_dataset.Y2[i].to(device), Y_min_vals, Y_max_vals).cpu().numpy()
         
-        # 7. Identify Object Type dynamically via Context ID
+        # Identify Object Type dynamically via Context ID
         curr_context_norm = full_dataset.C[i]
         raw_id = denormalize_data(curr_context_norm, C_min_val, C_max_val)[-1].item()
         
@@ -261,7 +302,7 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
     
     # Styling
     ax.set_ylabel('Success Rate (%)', fontsize=12, fontweight='bold')
-    ax.set_title('Task Extrapolation Success Rates (Test Set)\nTEMP', fontsize=14, fontweight='bold')
+    ax.set_title(f'Task Extrapolation Success Rates (Test Set)\n{args.model.upper()}', fontsize=14, fontweight='bold')
     ax.set_xticks(x)
     
     # Rotate labels so they don't overlap
@@ -291,32 +332,14 @@ def calculate_success_rates_and_plot(base_data_folder, device='cpu'):
     plt.savefig(plot_path, dpi=300)
     print(f"Bar chart saved to {plot_path}")
 
-def calculate_continuous_errors_and_plot(base_data_folder, device='cpu'):
+def calculate_continuous_errors_and_plot(load_path, save_path, full_dataset, norm_stats, model, args, device='cpu'):
     print("\n--- CALCULATING CONTINUOUS ERRORS (CM) & PLOTTING ---")
 
-    # Load Data
-    full_dataset = ReassembleDataset(data_dir=base_data_folder)
-
-    # Load Normalization Stats
-    checkpoint = torch.load(os.path.join(save_path, "best_model.pth"))
-    norm_stats = checkpoint['norm_stats']
     Y_min_vals, Y_max_vals, C_min_val, C_max_val = norm_stats['Y_min'], norm_stats['Y_max'], norm_stats['C_min'], norm_stats['C_max']
-
-    # Normalize data
-    full_dataset.Y1, full_dataset.Y2, full_dataset.C = normalize_data(full_dataset.Y1, full_dataset.Y2, full_dataset.C, Y_min_vals, Y_max_vals, C_min_val, C_max_val)
     
-    # Data dimensions
-    d_x = full_dataset.d_x
-    d_y1 = full_dataset.d_y1
-    d_y2 = full_dataset.d_y2
-    d_param = full_dataset.d_param
     time_len = full_dataset.time_len
-    
-    # Load Model
-    model = temp_model.TempModel(d_x, d_y1, d_y2, d_param).to(device)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
 
+    # Move bounds to device for denormalization
     Y_min_vals = Y_min_vals.to(device)
     Y_max_vals = Y_max_vals.to(device)
 
@@ -326,7 +349,7 @@ def calculate_continuous_errors_and_plot(base_data_folder, device='cpu'):
     end_errors = {m: {} for m in metrics}
 
     # Load the hidden test indices
-    test_idx = np.load(os.path.join(save_path, 'test_indices.npy'))
+    test_idx = np.load(os.path.join(load_path, 'test_indices.npy' if not args.fine_tuned else 'finetuning_test_indices.npy'))
     print(f"Evaluating continuous errors on {len(test_idx)} test samples...")
     
     x_full = torch.linspace(0, 1, time_len, device=device).view(1, time_len, 1)
@@ -347,15 +370,26 @@ def calculate_continuous_errors_and_plot(base_data_folder, device='cpu'):
         eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
         eval_mask[0, condition_points] = False # Set condition points to False (Observed)
         
-        # Run Inference (p=2 forces Decoder to use L_I to generate Forward and Inverse trajectories)
+        # Run Inference
         with torch.no_grad():
-            output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=2, mask_indices_2=eval_mask)
-            
-        # Extract the Predicted Inverse Trajectory
-        _, _, pred_mean_i, _ = output.chunk(4, dim=-1)
+            if args.model.startswith('cnmp'):
+                # Prepare Condition
+                cond_pts = []
+                for idx in condition_points:
+                    cond_pts.append([x_full[0, idx], y2_seq[0, idx]])
+
+                means_norm, _ = model_predict.predict_inverse_inverse(model, time_len, curr_context, cond_pts, full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, device=device)
+                pred_seq = means_norm
+            elif args.model.startswith('temp'):
+                output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=2, mask_indices_2=eval_mask)
+                # Extract the Predicted Inverse Trajectory
+                _, _, pred_mean_i, _ = output.chunk(4, dim=-1)
+                pred_seq = pred_mean_i
+            elif args.model.startswith('tedp'):
+                pred_seq = model.sample(cond_seq=y2_seq, params=curr_context, mask_indices=eval_mask, source_dim='y2', target_dim='y2', time_len=time_len)
         
         # Denormalize Predictions and Ground Truth to physical scale
-        pred_traj = denormalize_data(pred_mean_i.squeeze(0), Y_min_vals, Y_max_vals).cpu().numpy()
+        pred_traj = denormalize_data(pred_seq.squeeze(0), Y_min_vals, Y_max_vals).cpu().numpy()
         gt_traj = denormalize_data(full_dataset.Y2[i].to(device), Y_min_vals, Y_max_vals).cpu().numpy()
         
         # Identify Object Type dynamically via Context ID
@@ -484,42 +518,19 @@ def calculate_continuous_errors_and_plot(base_data_folder, device='cpu'):
     save_numerical_statistics(start_errors, "Start Point (t=0)", 'continuous_errors_stats_start.txt')
     save_numerical_statistics(end_errors, "End Point (t=1)", 'continuous_errors_stats_end.txt')
 
-def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
-    print(f"\n--- EVALUATING RANDOM TRAJECTORIES ({num_samples} samples) ---")
+def predict_random_trajectories(load_path, save_path, full_dataset, Y2_raw, norm_stats, model, args, num_samples=6, device='cpu'):
+    print(f"\n--- PREDICTING RANDOM TRAJECTORIES ({num_samples} samples) ---")
 
-    # Load Data & Stats
-    full_dataset = ReassembleDataset(data_dir=base_data_folder)
-    
-    checkpoint = torch.load(os.path.join(save_path, "best_model.pth"))
-    norm_stats = checkpoint['norm_stats']
-    Y_min_vals, Y_max_vals = norm_stats['Y_min'], norm_stats['Y_max']
-    C_min_val, C_max_val = norm_stats['C_min'], norm_stats['C_max']
+    Y_min_vals, Y_max_vals, C_min_val, C_max_val = norm_stats['Y_min'], norm_stats['Y_max'], norm_stats['C_min'], norm_stats['C_max']
 
-    # Keep a raw copy of Y2 for plotting ground truth before normalization alters it
-    Y2_raw = full_dataset.Y2.clone()
-
-    # Normalize dataset
-    full_dataset.Y1, full_dataset.Y2, full_dataset.C = normalize_data(
-        full_dataset.Y1, full_dataset.Y2, full_dataset.C, 
-        Y_min_vals, Y_max_vals, C_min_val, C_max_val
-    )
-
-    d_x = full_dataset.d_x
-    d_y1 = full_dataset.d_y1 
-    d_y2 = full_dataset.d_y2 
-    d_param = full_dataset.d_param
     time_len = full_dataset.time_len
 
-    # Load Model
-    model = temp_model.TempModel(d_x, d_y1, d_y2, d_param).to(device)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
-
+    # Move bounds to device for denormalization
     Y_min_vals = Y_min_vals.to(device)
     Y_max_vals = Y_max_vals.to(device)
 
     # Load test indices and sample from them
-    test_idx = np.load(os.path.join(save_path, 'test_indices.npy'))
+    test_idx = np.load(os.path.join(load_path, 'test_indices.npy' if not args.fine_tuned else 'finetuning_test_indices.npy'))
     test_idx_list = test_idx.tolist()
     
     num_to_plot = min(num_samples, len(test_idx_list))
@@ -533,12 +544,12 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
 
     # Define the evaluation modes (p=1 forces L_F, p=2 forces L_I)
     modes = [
-        {'name': 'forward_condition', 'p': 1, 'title': 'Zero-Shot Inversion (Conditioned on Forward Trajectory)'},
-        {'name': 'inverse_condition', 'p': 2, 'title': 'Reconstruction (Conditioned on Inverse Trajectory)'}
+        {'name': 'forward_condition', 'p': 1, 'title': 'Conditioned on Forward Trajectory'},
+        {'name': 'inverse_condition', 'p': 2, 'title': 'Conditioned on Inverse Trajectory'}
     ]
 
     for mode in modes:
-        fig, axes = plt.subplots(num_to_plot, d_y2, figsize=(15, 4 * num_to_plot))
+        fig, axes = plt.subplots(num_to_plot, full_dataset.d_y2, figsize=(15, 4 * num_to_plot))
         if num_to_plot == 1: axes = np.expand_dims(axes, 0) 
 
         for row_idx, traj_idx in enumerate(indices):
@@ -554,15 +565,16 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
                     min_diff = diff
                     curr_obj_name = config['label']
             
-            # --- A. Prepare Ground Truth ---
+            # --- Prepare Ground Truth ---
             curr_y_truth_raw = Y2_raw[traj_idx].numpy() # Place Action (Inverse)
             
-            # --- B. Prepare Sequences ---
+            # --- Prepare Sequences ---
             y1_seq = full_dataset.Y1[traj_idx].unsqueeze(0).to(device)
             y2_seq = full_dataset.Y2[traj_idx].unsqueeze(0).to(device)
             curr_context = full_dataset.C[traj_idx].view(1, 1, -1).to(device)
 
-            # --- C. Run Inference ---
+            # --- Run Inference ---
+            samples = []
             with torch.no_grad():
                 if mode['p'] == 1:
                     # Condition on the Forward Trajectory
@@ -570,55 +582,110 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
                     eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
                     eval_mask[0, condition_points] = False # Set condition points to False (Observed)
 
-                    # The p=mode['p'] parameter forces the decoder to use the correct latent vector.
-                    output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=mode['p'], mask_indices_1=eval_mask)
+                    if args.model.startswith('cnmp'):
+                        # Prepare Condition
+                        cond_pts = []
+                        for idx in condition_points:
+                            cond_pts.append([x_full[0, idx], y1_seq[0, idx]])
+
+                        pred_mean_i_norm, pred_std_i_norm = model_predict.predict_inverse(model, time_len, curr_context, cond_pts, full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, device=device)
+                    elif args.model.startswith('temp'):
+                        output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=mode['p'], mask_indices_1=eval_mask) # The p=mode['p'] parameter forces the decoder to use the correct latent vector
+                        _, _, pred_mean_i_norm, pred_std_i_norm = output.chunk(4, dim=-1) # Extract the Inverse Trajectory predictions (Mean and Log-Variance)
+                        pred_std_i_norm = torch.log(1 + torch.exp(pred_std_i_norm)) # Convert log variance parameter to standard deviation
+
+                        pred_mean_i_norm = pred_mean_i_norm.squeeze(0)
+                        pred_std_i_norm = pred_std_i_norm.squeeze(0)
+                    elif args.model.startswith('tedp'):
+                        num_mc_samples = 6 # Number of diffusion generations for uncertainty estimation
+                        for _ in range(num_mc_samples):
+                            pred = model.sample(cond_seq=y1_seq, params=curr_context, mask_indices=eval_mask, source_dim='y1', target_dim='y2', time_len=time_len)
+                            samples.append(pred.squeeze(0))
+
+                        # Calculate Empirical Mean and Standard Deviation across the 10 samples
+                        samples_tensor = torch.stack(samples) # Shape: (10, 200, 3)
+                        pred_mean_i_norm = samples_tensor.mean(dim=0)
+                        pred_std_i_norm = samples_tensor.std(dim=0)
                 else:
-                    # Condition on the Inverse Trajectory
-                    condition_points = [0, -1] # t=0 and t=1 of the inverse trajectory corresponds to indices 0 and 199 (since time_len=200)
-                    eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) # Set all 200 to True (Masked)
-                    eval_mask[0, condition_points] = False # Set condition points to False (Observed)
+                    # Condition on Inverse Trajectory
+                    condition_points = [0, -1] 
+                    eval_mask = torch.ones(1, time_len, dtype=torch.bool, device=device) 
+                    eval_mask[0, condition_points] = False 
 
-                    # The p=mode['p'] parameter forces the decoder to use the correct latent vector.
-                    output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=mode['p'], mask_indices_2=eval_mask)
+                    if args.model.startswith('cnmp'):
+                        # Prepare Condition
+                        cond_pts = []
+                        for idx in condition_points:
+                            cond_pts.append([x_full[0, idx], y2_seq[0, idx]])
 
-                # Extract the Inverse Trajectory predictions (Mean and Log-Variance)
-                _, _, pred_mean_i_norm, pred_std_i_norm = output.chunk(4, dim=-1)
+                        pred_mean_i_norm, pred_std_i_norm = model_predict.predict_inverse_inverse(model, time_len, curr_context, cond_pts, full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, device=device)
+                    elif args.model.startswith('temp'):
+                        output, _, _, _ = model(y1_seq, y2_seq, curr_context, x_full, extra_pass=False, p=mode['p'], mask_indices_2=eval_mask)
+                        _, _, pred_mean_i_norm, pred_std_i_norm = output.chunk(4, dim=-1) # Extract the Inverse Trajectory predictions (Mean and Log-Variance)
+                        pred_std_i_norm = torch.log(1 + torch.exp(pred_std_i_norm)) # Convert log variance parameter to standard deviation
+
+                        pred_mean_i_norm = pred_mean_i_norm.squeeze(0)
+                        pred_std_i_norm = pred_std_i_norm.squeeze(0)
+                    elif args.model.startswith('tedp'):
+                        num_mc_samples = 6
+                        for _ in range(num_mc_samples):
+                            pred = model.sample(cond_seq=y2_seq, params=curr_context, mask_indices=eval_mask, source_dim='y2', target_dim='y2', time_len=time_len)
+                            samples.append(pred.squeeze(0))
+
+                        # Calculate Empirical Mean and Standard Deviation across the 10 samples
+                        samples_tensor = torch.stack(samples) # Shape: (10, 200, 3)
+                        pred_mean_i_norm = samples_tensor.mean(dim=0)
+                        pred_std_i_norm = samples_tensor.std(dim=0)
                 
-                # Convert log variance parameter to standard deviation
-                pred_std_i_norm = torch.log(1 + torch.exp(pred_std_i_norm))
+            # --- Denormalize Output ---
+            if args.model.startswith('cnmp') or args.model.startswith('temp'):
+                # Denormalize means back to workspace coordinates
+                means_pred = denormalize_data(pred_mean_i_norm, Y_min_vals, Y_max_vals).cpu().numpy()
                 
-            # --- D. Denormalize Output ---
-            pred_mean_i_norm = pred_mean_i_norm.squeeze(0)
-            pred_std_i_norm = pred_std_i_norm.squeeze(0)
+                # Standard deviation scales linearly with the range of the workspace
+                y_range = (Y_max_vals - Y_min_vals).cpu().numpy()
+                stds_pred = pred_std_i_norm.cpu().numpy() * y_range
+            elif args.model.startswith('tedp'):
+                # Denormalize means back to workspace coordinates
+                all_samples_pred = denormalize_data(samples_tensor, Y_min_vals, Y_max_vals).cpu().numpy()
+                
+                # Apply Savitzky-Golay Filter to smooth the DDPM wiggles on all samples
+                # window_length=15, polyorder=3 are standard values for 200-step trajectories
+                all_samples_smoothed = savgol_filter(all_samples_pred, window_length=15, polyorder=3, axis=1)
 
-            # Denormalize means back to workspace coordinates
-            means_pred = denormalize_data(pred_mean_i_norm, Y_min_vals, Y_max_vals).cpu().numpy()
-            
-            # Standard deviation scales linearly with the range of the workspace
-            y_range = (Y_max_vals - Y_min_vals).cpu().numpy()
-            stds_pred = pred_std_i_norm.cpu().numpy() * y_range
-
-            # --- E. Plotting ---
+            # --- Plotting ---
             dim_labels = ["X (Place)", "Y (Place)", "Z (Place)"]
             
-            for col_idx in range(d_y2):
+            for col_idx in range(full_dataset.d_y2):
                 ax = axes[row_idx, col_idx]
                 
-                # 1. Ground Truth
+                # Plot Ground Truth
                 ax.plot(time_steps, curr_y_truth_raw[:, col_idx], 
                         color='black', linestyle='-', linewidth=2, alpha=0.5, label='GT (Place)')
                 
-                # 2. Prediction
-                ax.plot(time_steps, means_pred[:, col_idx], 
-                        color='blue', linestyle='--', linewidth=2, label='Pred')
+                if args.model.startswith('cnmp') or args.model.startswith('temp'):
+                    # Prediction
+                    ax.plot(time_steps, means_pred[:, col_idx], 
+                            color='blue', linestyle='--', linewidth=2, label='Pred')
+                    
+                    # Uncertainty
+                    sigma = stds_pred[:, col_idx]
+                    mean_curve = means_pred[:, col_idx]
+                    ax.fill_between(time_steps, mean_curve - 2*sigma, mean_curve + 2*sigma, 
+                                    color='blue', alpha=0.1, label='Uncertainty')
+                elif args.model.startswith('tedp'):
+                    # Plot the "Uncertainty" Spaghetti (Background samples)
+                    # We plot samples 1 through 9 with high transparency
+                    for s_idx in range(1, num_mc_samples):
+                        ax.plot(time_steps, all_samples_smoothed[s_idx, :, col_idx], 
+                                color='blue', linestyle='-', linewidth=1, alpha=0.15)
+                    
+                    # Plot the Primary Representative Sample (Sample 0)
+                    # This ensures we see one continuous, un-flattened trajectory
+                    ax.plot(time_steps, all_samples_smoothed[0, :, col_idx], 
+                            color='blue', linestyle='--', linewidth=2, label='Pred (Primary)')
                 
-                # 3. Uncertainty
-                sigma = stds_pred[:, col_idx]
-                mean_curve = means_pred[:, col_idx]
-                ax.fill_between(time_steps, mean_curve - 2*sigma, mean_curve + 2*sigma, 
-                                color='blue', alpha=0.1, label='Uncertainty')
-                
-                # 4. Condition Points (Only for mode['p'] == 2 since that's where we condition on the inverse trajectory)
+                # Condition Points
                 if mode['p'] == 2:
                     for idx in condition_points:
                         ax.scatter(time_steps[idx], curr_y_truth_raw[idx, col_idx], color='red', marker='o', s=80, label='Condition Point' if idx == condition_points[0] else "")
@@ -633,17 +700,17 @@ def evaluate_random_trajectories(base_data_folder, num_samples=6, device='cpu'):
                 if row_idx == 0 and col_idx == 0:
                     ax.legend(fontsize='small', loc='best')
 
-        plt.suptitle(f"{mode['title']}\nModel ID: {run_id}", fontsize=16)
+        plt.suptitle(f"{mode['title']}\nModel: {args.model.upper()}", fontsize=16)
         plt.tight_layout()
         plt.subplots_adjust(top=0.92) 
         
-        save_file = f'{save_path}/eval_multi_object_{num_to_plot}_{mode["name"]}.png'
+        save_file = f'{save_path}/prediction_{num_to_plot}_{mode["name"]}.png'
         plt.savefig(save_file)
-        print(f"Evaluation plots saved to {save_file}")
+        print(f"Prediction plots saved to {save_file}")
 
 if __name__ == "__main__":
-    seed = 42
-    utils.seed_everything(seed)
+    args = parse_args()
+    seed_everything(args.seed)
     
     # Device configuration
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -651,10 +718,81 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name(0)}")
 
-    base_data_folder = "data/paired_trajectories_insert_place"
+    # Load Data
+    if args.dataset == "reassemble":
+        base_data_folder = "data/paired_trajectories_insert_place"
+    elif args.dataset == "synthetic_small":
+        base_data_folder = "data/synthetic_trajectories"
+    elif args.dataset == "synthetic_large":
+        base_data_folder = "data/synthetic_trajectories_large"
+
+    full_dataset = ReassembleDataset(data_dir=base_data_folder)
+
+    if args.model == "cnmp":
+        load_path = f"model/dual_cnmp_latent_alignment/save/{args.run_id}"
+        from model.dual_cnmp_latent_alignment import dual_cnmp_model
+        model = dual_cnmp_model.DualCNMP(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
     
-    plot_grad_norms()
-    plot_training_progress()
-    calculate_success_rates_and_plot(base_data_folder, device=device)
-    calculate_continuous_errors_and_plot(base_data_folder, device=device)
-    evaluate_random_trajectories(base_data_folder, num_samples=100, device=device)
+    elif args.model in ["temp_vanilla", "temp_unmasked_pooling", "temp_cls"]:
+        load_path = f"model/transformer_encoded_movement_primitive/save/{args.run_id}"
+        if args.model == "temp_vanilla":
+            from model.transformer_encoded_movement_primitive import temp_model
+            model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
+        elif args.model == "temp_unmasked_pooling":
+            from model.transformer_encoded_movement_primitive.unmasked_pooling import temp_model
+            model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
+        elif args.model == "temp_cls":
+            from model.transformer_encoded_movement_primitive.cls_token import temp_model
+            model = temp_model.TempModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
+        
+    elif args.model in ["tedp_vanilla", "tedp_unmasked_pooling", "tedp_cross_attention", "tedp_cfg"]:
+        load_path = f"model/transformer_encoded_diffusion_policy/save/{args.run_id}"
+        if args.model == "tedp_vanilla":
+            from model.transformer_encoded_diffusion_policy import tedp_model
+            model = tedp_model.TedpModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
+        elif args.model == "tedp_unmasked_pooling":
+            from model.transformer_encoded_diffusion_policy.unmasked_pooling import tedp_model
+            model = tedp_model.TedpModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
+        elif args.model == "tedp_cross_attention":
+            from model.transformer_encoded_diffusion_policy.cross_attention_conditioning import tedp_model
+            model = tedp_model.TedpModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
+        elif args.model == "tedp_cfg":
+            from model.transformer_encoded_diffusion_policy.classifier_free_guidance import tedp_model
+            model = tedp_model.TedpModel(full_dataset.d_x, full_dataset.d_y1, full_dataset.d_y2, full_dataset.d_param).to(device)
+    
+    if not os.path.exists(load_path):
+        print(f"Error: Load path {load_path} does not exist. Please check your run_id and ensure the model has been trained.")
+        sys.exit(1)
+
+    save_path = os.path.join(load_path, "pretrained" if not args.fine_tuned else "finetuned")
+    os.makedirs(save_path, exist_ok=True)
+
+    # Load the best model checkpoint
+    checkpoint = torch.load(os.path.join(load_path, "best_model.pth" if not args.fine_tuned else "finetuning_best_model.pth"))
+    if args.model == "cnmp":
+        model.load_state_dict(checkpoint)
+    else:
+        model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
+
+    # Normalize data
+    if args.model == "cnmp":
+        norm_stats = np.load(os.path.join(load_path, 'normalization_stats.npy'), allow_pickle=True).item()
+    else:
+        norm_stats = checkpoint['norm_stats']
+    Y_min_vals, Y_max_vals, C_min_val, C_max_val = norm_stats['Y_min'], norm_stats['Y_max'], norm_stats['C_min'], norm_stats['C_max']
+
+    # Normalize data
+    Y2_raw = full_dataset.Y2.clone()    # Keep a raw copy of Y2 for plotting ground truth
+    full_dataset.Y1, full_dataset.Y2, full_dataset.C = normalize_data(full_dataset.Y1, full_dataset.Y2, full_dataset.C, Y_min_vals, Y_max_vals, C_min_val, C_max_val)
+    
+    plot_grad_norms(load_path, save_path, args)
+
+    if args.model == "cnmp":
+        plot_training_progress_cnmp(load_path, save_path, args)
+    else:
+        plot_training_progress_temp_tedp(load_path, save_path, args)
+
+    calculate_success_rates_and_plot(load_path, save_path, full_dataset, norm_stats, model, args, device=device)
+    calculate_continuous_errors_and_plot(load_path, save_path, full_dataset, norm_stats, model, args, device=device)
+    predict_random_trajectories(load_path, save_path, full_dataset, Y2_raw, norm_stats, model, args, num_samples=50, device=device)

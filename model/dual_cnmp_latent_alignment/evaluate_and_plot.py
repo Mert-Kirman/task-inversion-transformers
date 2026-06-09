@@ -3,6 +3,8 @@ import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
 import random
 
 # Adjust path to find model modules
@@ -15,7 +17,7 @@ import model.model_predict as model_predict
 import model.utils as utils
 
 # ================= CONFIGURATION =================
-run_id = "run_1772222405.2956579"
+run_id = "run_20260408_235825"
 save_path = f"model/dual_cnmp_latent_alignment/save/{run_id}"
 
 # POINT TO THE PAIRED DATA FOLDER
@@ -25,8 +27,40 @@ model_name = "best_model.pth"
 
 # Object Configuration (Must match train.py)
 object_config = {
-    'round_peg_4':  {'id': 0.0, 'label': 'Round Peg 4 (Source)'},
-    'square_peg_4': {'id': 1.0, 'label': 'Square Peg 4 (Target)'} 
+    # ==========================================
+    # PAIRED CATEGORIES (The Teachers)
+    # ==========================================
+    
+    # Category 1: Radially Symmetric 
+    'round_peg_1':  {'id': 0.0, 'paired': True,  'label': 'Round Peg 1'},
+    'round_peg_2':  {'id': 1.0, 'paired': True,  'label': 'Round Peg 2'},
+    'round_peg_3':  {'id': 2.0, 'paired': True,  'label': 'Round Peg 3'},
+    'round_peg_4':  {'id': 3.0, 'paired': True,  'label': 'Round Peg 4'},
+    
+    # Category 2: Meshing / Rotational
+    'small_gear':   {'id': 4.0, 'paired': True,  'label': 'Small Gear'},
+    'medium_gear':  {'id': 5.0, 'paired': True,  'label': 'Medium Gear'},
+    'large_gear':   {'id': 6.0, 'paired': True,  'label': 'Large Gear'},
+    
+    # Category 3: Asymmetric Connectors & Fasteners
+    'bnc':          {'id': 7.0, 'paired': True,  'label': 'BNC Connector'},
+    'bolt_4':       {'id': 8.0, 'paired': True,  'label': 'Bolt 4 / Nut'},
+    'd-sub':        {'id': 9.0, 'paired': True,  'label': 'D-SUB Connector'},
+    'ethernet':     {'id': 10.0, 'paired': True,  'label': 'Ethernet Connector'},
+    'waterproof':   {'id': 11.0, 'paired': True,  'label': 'Waterproof Connector'},
+
+    # ==========================================
+    # UNPAIRED CATEGORIES (Zero-Shot Targets)
+    # ==========================================
+    
+    # Zero-Shot Test 1: Corners & Edges (Highly Geometric, No Rotational Symmetry)
+    'square_peg_1': {'id': 12.0, 'paired': False, 'label': 'Square Peg 1 (Unpaired)'},
+    'square_peg_2': {'id': 13.0, 'paired': False, 'label': 'Square Peg 2 (Unpaired)'},
+    'square_peg_3': {'id': 14.0, 'paired': False, 'label': 'Square Peg 3 (Unpaired)'},
+    'square_peg_4': {'id': 15.0, 'paired': False, 'label': 'Square Peg 4 (Unpaired)'},
+    
+    # Zero-Shot Test 2: Highly Asymmetric Alien Shape
+    'usb':          {'id': 16.0, 'paired': False, 'label': 'USB Connector (Unpaired)'}
 }
 # =================================================
 
@@ -233,18 +267,24 @@ def calculate_success_rates_and_plot(device='cpu'):
 
     # Run Inference ONCE for all data
     t_steps = np.linspace(0, 1, time_len)
-    cond_idx = 0 # t=0
+    cond_idx = [0, -1] # Condition on Start and End for evaluation
     
     # Store predictions to avoid re-running model for each threshold
     predictions = [] # List of (pred_traj, gt_traj, obj_name)
+
+    # Load Test Indices
+    test_idx = np.load(os.path.join(save_path, 'test_indices.npy'))
+    print(f"Evaluating on {len(test_idx)} test samples...")
     
-    print("Running Inference...")
-    for i in range(len(Y2_raw)):
+    for i in test_idx:
         # Prepare Condition
-        y_cond_raw = Y2_raw[i, cond_idx:cond_idx+1]
-        y_cond_norm = normalize_data(y_cond_raw, y_min, y_max)
-        cond_pts = [[t_steps[cond_idx], y_cond_norm]]
-        
+        cond_pts = []
+        for idx in cond_idx:
+            y_cond_raw = Y2_raw[i, idx]
+            y_cond_raw = y_cond_raw.unsqueeze(0) # Shape (1, d_y2)
+            y_cond_norm = normalize_data(y_cond_raw, y_min, y_max)
+            cond_pts.append([t_steps[idx], y_cond_norm])
+
         curr_context = C_normalized[i]
         
         with torch.no_grad():
@@ -301,27 +341,29 @@ def calculate_success_rates_and_plot(device='cpu'):
 
     # Generate Bar Chart
     print("\nGenerating Bar Chart...")
-    
-    # Data Preparation
-    labels = [object_config[o]['label'] for o in object_config] # ["Round Peg (Source)", "Square Peg (Target)"]
-    obj_keys = list(object_config.keys()) # ['round_peg_4', 'square_peg_4']
+
+    # Dynamically grab only evaluated objects and add the (n=X) count
+    evaluated_obj_keys = list(obj_counts.keys())
+    labels = [f"{object_config[k]['label']} (n={obj_counts[k]})" for k in evaluated_obj_keys]
     
     x = np.arange(len(labels))  # label locations
     width = 0.35  # width of the bars
     
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(14, 6))
     
-    # Plot bars for each scenario
-    rects1 = ax.bar(x - width/2, [final_stats['5% (Strict)'][k] for k in obj_keys], width, label='5% Tolerance (Strict)', color='#d9534f')
-    rects2 = ax.bar(x + width/2, [final_stats['10% (Relaxed)'][k] for k in obj_keys], width, label='10% Tolerance (Relaxed)', color='#5bc0de')
+    # Use .get(k, 0) to avoid KeyErrors if a class is missing
+    rects1 = ax.bar(x - width/2, [final_stats['5% (Strict)'].get(k, 0) for k in evaluated_obj_keys], width, label='5% Tolerance (Strict)', color='#d9534f')
+    rects2 = ax.bar(x + width/2, [final_stats['10% (Relaxed)'].get(k, 0) for k in evaluated_obj_keys], width, label='10% Tolerance (Relaxed)', color='#5bc0de')
     
     # Styling
     ax.set_ylabel('Success Rate (%)', fontsize=12, fontweight='bold')
-    ax.set_title('Task Extrapolation Success Rates\n(Round vs. Square Peg)', fontsize=14, fontweight='bold')
+    ax.set_title('Task Extrapolation Success Rates (Test Set)\nDual-CNMP Baseline', fontsize=14, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, fontsize=11, fontweight='bold')
-    ax.set_ylim(0, 110)
-    ax.legend(loc='upper right', fontsize=10)
+    
+    # Rotate labels and add headroom
+    ax.set_xticklabels(labels, fontsize=8, fontweight='bold', rotation=45, ha='right')
+    ax.set_ylim(0, 130)
+    ax.legend(loc='upper center', ncol=2, fontsize=10)
     ax.grid(axis='y', linestyle='--', alpha=0.5)
     
     # Add Value Labels on top of bars
@@ -330,9 +372,10 @@ def calculate_success_rates_and_plot(device='cpu'):
             height = rect.get_height()
             ax.annotate(f'{height:.1f}%',
                         xy=(rect.get_x() + rect.get_width() / 2, height),
-                        xytext=(0, 3),  # 3 points vertical offset
+                        xytext=(0, 5),  
                         textcoords="offset points",
-                        ha='center', va='bottom', fontweight='bold')
+                        ha='center', va='bottom', fontweight='bold',
+                        fontsize=6, rotation=45) # Rotated and shrunk
 
     autolabel(rects1)
     autolabel(rects2)
@@ -341,6 +384,188 @@ def calculate_success_rates_and_plot(device='cpu'):
     plot_path = os.path.join(save_path, 'success_rate_comparison.png')
     plt.savefig(plot_path, dpi=300)
     print(f"Bar chart saved to {plot_path}")
+
+def calculate_continuous_errors_and_plot(device='cpu'):
+    print("\n--- CALCULATING CONTINUOUS ERRORS (CM) & PLOTTING ---")
+
+    # Load Data & Stats
+    y_min, y_max, c_min, c_max = load_normalization_stats()
+    y_min = y_min.to(device)
+    y_max = y_max.to(device)
+    if c_min is not None: c_min = c_min.to(device)
+    if c_max is not None: c_max = c_max.to(device)
+    
+    Y1_raw, Y2_raw, C_raw, obj_names = load_matched_data()
+    
+    d_x = 1
+    d_y1 = Y1_raw.shape[2] 
+    d_y2 = Y2_raw.shape[2] 
+    d_param = C_raw.shape[1] 
+    time_len = Y1_raw.shape[1] 
+    
+    Y1_raw = Y1_raw.to(device)
+    Y2_raw = Y2_raw.to(device)
+    C_raw = C_raw.to(device)
+    
+    # Load Model
+    model = dual_cnmp_model.DualCNMP(d_x, d_y1, d_y2, d_param).to(device)
+    model_path = os.path.join(save_path, model_name)
+    if not os.path.exists(model_path):
+        print(f"Model not found at {model_path}")
+        return
+    
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.eval()
+    
+    C_normalized = C_raw.clone()
+    if c_min is not None and c_max is not None:
+        C_normalized = normalize_data(C_raw, c_min, c_max)
+
+    # Setup Data Structures
+    metrics = ['Euclidean (3D)', 'X-Axis (Left/Right)', 'Y-Axis (Forward/Back)', 'Z-Axis (Depth)']
+    start_errors = {m: {} for m in metrics}
+    end_errors = {m: {} for m in metrics}
+
+    test_idx = np.load(os.path.join(save_path, 'test_indices.npy'))
+    print(f"Evaluating continuous errors on {len(test_idx)} test samples...")
+    
+    t_steps = np.linspace(0, 1, time_len)
+    cond_idx = [0, -1]
+
+    # Run Inference Loop
+    for i in test_idx:
+        # Prepare Condition
+        cond_pts = []
+        for idx in cond_idx:
+            y_cond_raw = Y2_raw[i, idx]
+            y_cond_raw = y_cond_raw.unsqueeze(0) # Shape (1, d_y2)
+            y_cond_norm = normalize_data(y_cond_raw, y_min, y_max)
+            cond_pts.append([t_steps[idx], y_cond_norm])
+
+        curr_context = C_normalized[i]
+        
+        with torch.no_grad():
+            means_norm, _ = model_predict.predict_inverse_inverse(
+                model, time_len, curr_context, cond_pts, d_x, d_y1, d_y2, device=device
+            )
+        
+        pred_traj = denormalize_data(means_norm, y_min, y_max).cpu().numpy()
+        gt_traj = Y2_raw[i].cpu().numpy()
+        obj = obj_names[i]
+        
+        if obj not in start_errors['Euclidean (3D)']:
+            for m in metrics:
+                start_errors[m][obj] = []
+                end_errors[m][obj] = []
+                
+        # Calculate Differences in cm
+        diff_start = (pred_traj[0, :3] - gt_traj[0, :3]) * 100.0
+        diff_end = (pred_traj[-1, :3] - gt_traj[-1, :3]) * 100.0
+        
+        start_errors['Euclidean (3D)'][obj].append(np.linalg.norm(diff_start))
+        start_errors['X-Axis (Left/Right)'][obj].append(abs(diff_start[0]))
+        start_errors['Y-Axis (Forward/Back)'][obj].append(abs(diff_start[1]))
+        start_errors['Z-Axis (Depth)'][obj].append(abs(diff_start[2]))
+        
+        end_errors['Euclidean (3D)'][obj].append(np.linalg.norm(diff_end))
+        end_errors['X-Axis (Left/Right)'][obj].append(abs(diff_end[0]))
+        end_errors['Y-Axis (Forward/Back)'][obj].append(abs(diff_end[1]))
+        end_errors['Z-Axis (Depth)'][obj].append(abs(diff_end[2]))
+
+    # Helper function to plot a set of 4 Violins using Seaborn
+    def create_violin_figure(error_data, time_title, filename):
+        evaluated_obj_keys = list(error_data['Euclidean (3D)'].keys())
+        
+        # Map object keys to their label with the (n=X) count included
+        label_map = {k: f"{object_config[k]['label']} (n={len(error_data['Euclidean (3D)'][k])})" for k in evaluated_obj_keys}
+        
+        # Convert the dictionary into a Pandas DataFrame for Seaborn
+        rows = []
+        for m in metrics:
+            for k in evaluated_obj_keys:
+                obj_label = label_map[k]
+                for val in error_data[m][k]:
+                    rows.append({'Metric': m, 'Object': obj_label, 'Error (cm)': val})
+        df = pd.DataFrame(rows)
+
+        # Save the error data for further plotting
+        csv_filename = filename.replace('.png', '.csv')
+        df.to_csv(os.path.join(save_path, csv_filename), index=False)
+        
+        fig, axes = plt.subplots(4, 1, figsize=(14, 18))
+        fig.suptitle(f'Trajectory {time_title} Deviation', fontsize=18, fontweight='bold', y=0.98)
+
+        for idx, m in enumerate(metrics):
+            ax = axes[idx]
+            df_metric = df[df['Metric'] == m]
+            
+            # Seaborn Violin Plot
+            sns.violinplot(
+                data=df_metric, 
+                x='Object', 
+                y='Error (cm)', 
+                ax=ax,
+                color='#5bc0de',
+                linewidth=1.5,
+                inner='box',
+                cut=0,   # Prevent the violin from drawing density below 0 cm
+                density_norm='width'
+            )
+            
+            ax.set_title(m, fontsize=14, fontweight='bold')
+            ax.set_ylabel('Error (cm)', fontsize=12, fontweight='bold')
+            ax.set_xlabel('') # Clear redundant x-axis label
+            
+            # Only show object names on the very bottom plot
+            if idx == 3:
+                ax.set_xticklabels(ax.get_xticklabels(), fontsize=10, fontweight='bold', rotation=45, ha='right')
+            else:
+                ax.set_xticklabels([])
+                
+            ax.grid(axis='y', linestyle='--', alpha=0.5)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.97]) 
+        plot_path = os.path.join(save_path, filename)
+        plt.savefig(plot_path, dpi=300)
+        print(f"Saved: {plot_path}")
+
+    # Helper function to calculate and save numerical statistics
+    def save_numerical_statistics(error_data, time_title, filename):
+        print(f"\n=== Numerical Statistics: {time_title} ===")
+        stats_file_path = os.path.join(save_path, filename)
+        
+        with open(stats_file_path, 'w') as f:
+            for m in metrics:
+                header = f"\n--- {m} ---"
+                print(header)
+                f.write(header + "\n")
+                
+                evaluated_obj_keys = list(error_data[m].keys())
+                for k in evaluated_obj_keys:
+                    err_list = error_data[m][k]
+                    if len(err_list) == 0:
+                        continue
+                        
+                    mean_val = np.mean(err_list)
+                    std_val = np.std(err_list)
+                    
+                    # Use the raw object name from object_config, plus (n=X)
+                    obj_label = f"{object_config[k]['label']} (n={len(err_list)})"
+                    line = f"{obj_label:<35} | Mean: {mean_val:>5.2f} cm | Std: {std_val:>5.2f} cm"
+                    
+                    print(line)
+                    f.write(line + "\n")
+                    
+        print(f"\nStatistics saved to {stats_file_path}")
+
+    # Generate the two separate figure files
+    print("\nGenerating Seaborn Violin Plots...")
+    create_violin_figure(start_errors, "Start Point (t=0)", 'continuous_error_violins_start.png')
+    create_violin_figure(end_errors, "End Point (t=1)", 'continuous_error_violins_end.png')
+
+    # Generate and save the numerical statistics
+    save_numerical_statistics(start_errors, "Start Point (t=0)", 'continuous_errors_stats_start.txt')
+    save_numerical_statistics(end_errors, "End Point (t=1)", 'continuous_errors_stats_end.txt')
 
 def evaluate_random_trajectories(num_samples=6, device='cpu'):
     # 1. Load Norm Stats
@@ -386,9 +611,11 @@ def evaluate_random_trajectories(num_samples=6, device='cpu'):
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 
-    # 4. Select Random Indices
-    num_to_plot = min(num_samples, num_demos)
-    indices = random.sample(range(num_demos), num_to_plot)
+    # 4. Select Random Indices from the Test Set
+    test_idx = np.load(os.path.join(save_path, 'test_indices.npy')).tolist()
+    
+    num_to_plot = min(num_samples, len(test_idx))
+    indices = random.sample(test_idx, num_to_plot)
     
     # 5. Define Condition Points
     time_steps = np.linspace(0, 1, time_len)
@@ -458,7 +685,7 @@ def evaluate_random_trajectories(num_samples=6, device='cpu'):
             if row_idx == 0 and col_idx == 0:
                 ax.legend(fontsize='small', loc='best')
 
-    plt.suptitle(f"Inverse Task Prediction (Round Peg vs Square Peg)\nModel: {model_name} | ID Context Included", fontsize=16)
+    plt.suptitle(f"Inverse Task Prediction\nModel: {model_name} | ID Context Included", fontsize=16)
     plt.tight_layout()
     plt.subplots_adjust(top=0.92) 
     
@@ -466,8 +693,7 @@ def evaluate_random_trajectories(num_samples=6, device='cpu'):
     plt.savefig(save_file)
     print(f"Evaluation plots saved to {save_file}")
 
-    # Condition from place action at t=0
-    cond_step_indices = [0]
+    cond_step_indices = [0, -1] # Conditioning at t=0 (Start) and t=1 (End)
     
     fig, axes = plt.subplots(num_to_plot, d_y1, figsize=(15, 4 * num_to_plot))
     if num_to_plot == 1: axes = np.expand_dims(axes, 0) 
@@ -485,7 +711,7 @@ def evaluate_random_trajectories(num_samples=6, device='cpu'):
         condition_points = []
         for t_idx in cond_step_indices:
             t_val = time_steps[t_idx]
-            y_val_raw = Y2_raw[traj_idx, t_idx:t_idx+1]
+            y_val_raw = Y2_raw[traj_idx, t_idx].unsqueeze(0) # Shape (1, d_y2)
             y_val_norm = normalize_data(y_val_raw, y_min, y_max)
             condition_points.append([t_val, y_val_norm])
         
@@ -522,9 +748,10 @@ def evaluate_random_trajectories(num_samples=6, device='cpu'):
                             color='blue', alpha=0.1, label='Uncertainty')
             
             # 4. Conditioning Point
-            cond_y_raw = Y2_raw[traj_idx, cond_step_indices[0], col_idx].cpu().numpy()
-            ax.scatter(time_steps[cond_step_indices[0]], cond_y_raw, 
-                       color='red', s=80, marker='o', label='Condition Point')
+            for cond_idx in cond_step_indices:
+                cond_y_raw = Y2_raw[traj_idx, cond_step_indices[cond_idx], col_idx].cpu().numpy()
+                ax.scatter(time_steps[cond_step_indices[cond_idx]], cond_y_raw, 
+                        color='red', s=80, marker='o', label='Condition Point')
 
             # Labels
             if row_idx == 0:
@@ -537,7 +764,7 @@ def evaluate_random_trajectories(num_samples=6, device='cpu'):
             if row_idx == 0 and col_idx == 0:
                 ax.legend(fontsize='small', loc='best')
 
-    plt.suptitle(f"Inverse Task Prediction (Round Peg vs Square Peg)\nModel: {model_name} | ID Context Included", fontsize=16)
+    plt.suptitle(f"Inverse Task Prediction\nModel: {model_name} | ID Context Included", fontsize=16)
     plt.tight_layout()
     plt.subplots_adjust(top=0.92) 
     
@@ -556,4 +783,5 @@ if __name__ == "__main__":
     
     plot_training_progress()
     calculate_success_rates_and_plot(device=device)
+    calculate_continuous_errors_and_plot(device=device)
     evaluate_random_trajectories(num_samples=100, device=device)
