@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 import sys
 import argparse
@@ -13,7 +14,7 @@ if project_root not in sys.path:
 
 from dataset import ReassembleDataset
 from model.dual_cnmp_latent_alignment import dual_cnmp_model
-from model.transformer_encoded_movement_primitive.unmasked_pooling import temp_model
+from model.transformer_encoded_movement_primitive.cls_token import temp_model
 from model.transformer_encoded_diffusion_policy.classifier_free_guidance import tedp_model
 import model.model_predict as model_predict
 from model.utils import seed_everything
@@ -25,10 +26,11 @@ def parse_args():
     parser.add_argument("--num_plots", type=int, default=10, help="Number of samples to visualize.")
     parser.add_argument("--dataset_path", type=str, default="data/paired_trajectories_insert_place")
     
-    parser.add_argument("--cnmp_run", type=str, default="model/dual_cnmp_latent_alignment/save/run_20260527_180758")
-    parser.add_argument("--temp_run", type=str, default="model/transformer_encoded_movement_primitive/save/run_20260527_180858")
-    parser.add_argument("--tedp_run", type=str, default="model/transformer_encoded_diffusion_policy/save/run_20260527_211026")
+    parser.add_argument("--cnmp_run", type=str, default="model/dual_cnmp_latent_alignment/save/run_20260601_002126")
+    parser.add_argument("--temp_run", type=str, default="model/transformer_encoded_movement_primitive/save/run_20260601_001803")
+    parser.add_argument("--tedp_run", type=str, default="model/transformer_encoded_diffusion_policy/save/run_20260601_001323")
     
+    parser.add_argument("--fine_tuned", action='store_true', help="Whether to load fine-tuned models (if not set, will load pre-fine-tuning checkpoints).")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
     parser.add_argument("--save_dir", type=str, default="model/visualizations/prediction_comparisons_3d", help="Directory to save the generated 3D plots.")
     return parser.parse_args()
@@ -55,7 +57,11 @@ def draw_table_and_origin(ax, stats):
 def main():
     args = parse_args()
     seed_everything(args.seed)
-    os.makedirs(args.save_dir, exist_ok=True)
+
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_folder = os.path.join(args.save_dir, f"{run_id}")
+    os.makedirs(save_folder, exist_ok=True)
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
@@ -65,7 +71,7 @@ def main():
     
     # 2. Load Normalization Stats & Test Indices
     stats_path = os.path.join(args.cnmp_run, 'normalization_stats.npy')
-    test_idx_path = os.path.join(args.cnmp_run, 'finetuning_test_indices.npy')
+    test_idx_path = os.path.join(args.cnmp_run, 'finetuning_test_indices.npy' if args.fine_tuned else 'test_indices.npy')
     
     if not os.path.exists(stats_path):
         raise FileNotFoundError(f"Could not find {stats_path}. Please check your run folder paths.")
@@ -83,28 +89,44 @@ def main():
     print("Loading Models...")
     # CNMP
     cnmp = dual_cnmp_model.DualCNMP(dataset.d_x, dataset.d_y1, dataset.d_y2, dataset.d_param).to(device)
-    cnmp.load_state_dict(torch.load(os.path.join(args.cnmp_run, 'finetuning_best_model.pth'), map_location=device))
+    cnmp.load_state_dict(torch.load(os.path.join(args.cnmp_run, 'finetuning_best_model.pth' if args.fine_tuned else 'best_model.pth'), map_location=device))
     cnmp.eval()
 
     # TEMP
     temp = temp_model.TempModel(dataset.d_x, dataset.d_y1, dataset.d_y2, dataset.d_param).to(device)
-    temp.load_state_dict(torch.load(os.path.join(args.temp_run, 'finetuning_best_model.pth'), map_location=device)['model_state_dict'])
+    temp.load_state_dict(torch.load(os.path.join(args.temp_run, 'finetuning_best_model.pth' if args.fine_tuned else 'best_model.pth'), map_location=device)['model_state_dict'])
     temp.eval()
 
     # TEDP
     tedp = tedp_model.TedpModel(dataset.d_x, dataset.d_y1, dataset.d_y2, dataset.d_param).to(device)
-    tedp.load_state_dict(torch.load(os.path.join(args.tedp_run, 'finetuning_best_model.pth'), map_location=device)['model_state_dict'])
+    tedp.load_state_dict(torch.load(os.path.join(args.tedp_run, 'finetuning_best_model.pth' if args.fine_tuned else 'best_model.pth'), map_location=device)['model_state_dict'])
     tedp.eval()
 
-    # Filter to only paired test samples
-    paired_test_indices = [idx for idx in test_indices if dataset.valid_inverses[idx]]
-    selected_indices = np.random.choice(paired_test_indices, min(args.num_plots, len(paired_test_indices)), replace=False)
+    # ==========================================
+    # STRATIFIED SAMPLING (50% Seen, 50% Unseen)
+    # ==========================================
+    test_idx_list = test_indices.tolist()
+    seen_idx = [i for i in test_idx_list if dataset.valid_inverses[i]]
+    unseen_idx = [i for i in test_idx_list if not dataset.valid_inverses[i]]
+    
+    num_seen = min(len(seen_idx), args.num_plots // 2)
+    num_unseen = min(len(unseen_idx), args.num_plots - num_seen)
+    
+    sample_seen = list(np.random.choice(seen_idx, num_seen, replace=False))
+    sample_unseen = list(np.random.choice(unseen_idx, num_unseen, replace=False))
+    
+    selected_indices = sample_seen + sample_unseen
+    np.random.shuffle(selected_indices) # Shuffle so they save in a mixed order
 
-    print(f"Generating {len(selected_indices)} plots...")
+    print(f"Generating {len(selected_indices)} plots ({num_seen} Seen, {num_unseen} Zero-Shot)...")
 
     for plot_idx, sample_idx in enumerate(selected_indices):
         print(f"Processing Sample {plot_idx + 1}/{len(selected_indices)} (Dataset Index: {sample_idx})...")
         
+        # Determine Domain for Title
+        is_seen = dataset.valid_inverses[sample_idx]
+        domain_label = "Seen Domain" if is_seen else "Zero-Shot Extrapolation"
+
         # Extract and Normalize Data
         Y1 = dataset.Y1[sample_idx:sample_idx+1].to(device)
         Y2 = dataset.Y2[sample_idx:sample_idx+1].to(device)
@@ -125,7 +147,6 @@ def main():
             eval_mask[0, condition_points] = False 
 
             # --- 1. CNMP Inference ---
-            # Prepare Condition
             cond_pts = []
             for idx in condition_points:
                 cond_pts.append([x_full[0, idx], Y2_norm[0, idx]])
@@ -173,20 +194,23 @@ def main():
         ax.set_xlabel('X (meters)')
         ax.set_ylabel('Y (meters)')
         ax.set_zlabel('Z (meters)')
-        ax.set_title(f"Sim2Real Trajectory Inversion Comparison\nTest Sample #{sample_idx}")
+        ax.set_title(f"Trajectory Inversion Comparison\n{domain_label} - Test Sample #{sample_idx}")
         
         # Legend (place outside plot if it gets cluttered)
         ax.legend(loc='upper left', bbox_to_anchor=(1.05, 1), borderaxespad=0.)
         
-        # Set stable view angle to see the table and the arc clearly
         ax.view_init(elev=20, azim=45)
 
         plt.tight_layout()
-        save_path = os.path.join(args.save_dir, f"comparison_sample_{sample_idx}.png")
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
+        plt.show()
+        
+        # # Label the file name so you know which domain it belongs to
+        # file_prefix = "seen" if is_seen else "unseen"
+        # save_path = os.path.join(save_folder, f"comparison_{file_prefix}_sample_{sample_idx}.png")
+        # plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        # plt.close()
 
-    print(f"\nAll plots saved to '{args.save_dir}'.")
+    print(f"\nAll plots saved to '{save_folder}'.")
 
 if __name__ == "__main__":
     main()

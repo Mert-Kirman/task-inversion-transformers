@@ -69,7 +69,7 @@ def generate_comparative_plots(model_specs, output_dir="model/model_comparisons"
         run_dir = model_spec["path"]
         finetuned = model_spec["finetuned"]
         metrics_dir = get_metrics_folder(run_dir, finetuned)
-        csv_path = os.path.join(metrics_dir, f"continuous_error_violins_{file_suffix}.csv")
+        csv_path = os.path.join(metrics_dir, f"continuous_error_violins_{file_suffix}_extrap.csv")
         
         if not os.path.exists(csv_path):
             print(f"  [WARNING] Could not find {csv_path}. Skipping '{model_name}'.")
@@ -91,12 +91,12 @@ def generate_comparative_plots(model_specs, output_dir="model/model_comparisons"
     # Filter to just 3D Euclidean error for the macroscopic comparisons
     df_3d = df_all[df_all['Metric'] == 'Euclidean (3D)'].copy()
 
-    # Clean object names (remove the "(n=X)" so the X-axis labels aren't too crowded)
-    df_3d['Object_Clean'] = df_3d['Object'].apply(lambda x: x.split(' (n=')[0])
+    if 'Domain' not in df_3d.columns:
+        print("Error: Expected 'Domain' column not found in CSV. Make sure you are using the updated evaluate.py.")
+        return
 
-    # Calculate sorting order: Sort by overall mean error across all models (Descending)
-    sort_means = df_3d.groupby('Object_Clean')['Error (cm)'].mean().sort_values(ascending=False)
-    order = sort_means.index.tolist()
+    # The domains to plot in order
+    order = ['Left Side (Seen)', 'Right Side (Zero-Shot)']
 
     # Styling
     sns.set_theme(style="whitegrid")
@@ -104,41 +104,45 @@ def generate_comparative_plots(model_specs, output_dir="model/model_comparisons"
     # Dynamic Palette Generation based on the number of models
     num_models = len(df_list)
     if num_models <= 10:
-        palette = sns.color_palette("tab10", num_models) # Good distinct colors for <= 10 models
+        palette = sns.color_palette("tab10", num_models)
     else:
-        palette = sns.color_palette("husl", num_models)  # Smooth gradient for > 10 models
+        palette = sns.color_palette("husl", num_models)
 
     # ==========================================
-    # Aggregated Violin Plots (All Objects Combined)
+    # 1. Grouped Violin Plot (Domain x Model)
     # ==========================================
-    plt.figure(figsize=(max(8, num_models * 2), 6)) # Dynamically widen plot if many models
+    plt.figure(figsize=(10, 7)) # Increased height slightly to fit bottom legend
     sns.violinplot(
         data=df_3d,
-        x='Model',
+        x='Domain',
         y='Error (cm)',
         hue='Model',
+        order=order,
         palette=palette,
-        legend=False,
         inner='box',
         cut=0,
+        density_norm='width',
         linewidth=1.5
     )
-    plt.title(f'Overall Model Performance Distribution\n{time_point}', fontsize=16, fontweight='bold')
+    plt.title(f'Spatial Generalization Performance Distribution\n{time_point}', fontsize=16, fontweight='bold')
     plt.ylabel('Euclidean Error (cm)', fontsize=14, fontweight='bold')
     plt.xlabel('')
-    if num_models > 4:
-        plt.xticks(rotation=15, ha='right') # Rotate x-labels if there are many models
+    
+    # Moved legend to the bottom center, up to 2 columns
+    plt.legend(title='Model Architecture', loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=min(2, num_models))
+    
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'1_overall_violin_comparison_{file_suffix}.png'), dpi=300)
+    # bbox_inches='tight' prevents the saved image from cutting off the new bottom legend
+    plt.savefig(os.path.join(output_dir, f'1_grouped_violin_comparison_{file_suffix}_extrap.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
     # ==========================================
-    # Grouped Box Plot (17 Objects x N Models)
+    # 2. Grouped Box Plot (Domain x Model)
     # ==========================================
-    plt.figure(figsize=(20, 8))
+    plt.figure(figsize=(10, 7))
     sns.boxplot(
         data=df_3d,
-        x='Object_Clean',
+        x='Domain',
         y='Error (cm)',
         hue='Model',
         order=order,
@@ -146,22 +150,23 @@ def generate_comparative_plots(model_specs, output_dir="model/model_comparisons"
         showfliers=True,
         linewidth=1.2
     )
-    plt.title(f'Object-by-Object Error Distribution (Sorted)\n{time_point}', fontsize=18, fontweight='bold')
+    plt.title(f'Domain-by-Domain Error Distribution\n{time_point}', fontsize=16, fontweight='bold')
     plt.ylabel('Euclidean Error (cm)', fontsize=14, fontweight='bold')
     plt.xlabel('')
-    plt.xticks(rotation=45, ha='right', fontsize=12, fontweight='bold')
-    plt.legend(title='Model architecture', fontsize=12, title_fontsize=12)
+    
+    plt.legend(title='Model Architecture', loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=min(2, num_models))
+    
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'2_grouped_boxplot_comparison_{file_suffix}.png'), dpi=300)
+    plt.savefig(os.path.join(output_dir, f'2_grouped_boxplot_comparison_{file_suffix}.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
     # ==========================================
-    # Grouped Bar Plot (Mean Errors Only)
+    # 3. Grouped Bar Plot (Mean Errors Only)
     # ==========================================
-    plt.figure(figsize=(20, 8))
-    sns.barplot(
+    plt.figure(figsize=(10, 7))
+    ax = sns.barplot(
         data=df_3d,
-        x='Object_Clean',
+        x='Domain',
         y='Error (cm)',
         hue='Model',
         order=order,
@@ -169,13 +174,23 @@ def generate_comparative_plots(model_specs, output_dir="model/model_comparisons"
         errorbar=None, 
         edgecolor='black'
     )
-    plt.title(f'Object-by-Object Mean Error (Sorted)\n{time_point}', fontsize=18, fontweight='bold')
+    plt.title(f'Domain-by-Domain Mean Error\n{time_point}', fontsize=16, fontweight='bold')
     plt.ylabel('Mean Euclidean Error (cm)', fontsize=14, fontweight='bold')
     plt.xlabel('')
-    plt.xticks(rotation=45, ha='right', fontsize=12, fontweight='bold')
-    plt.legend(title='Model architecture', fontsize=12, title_fontsize=12)
+    
+    # Add Value Labels on top of bars
+    for p in ax.patches:
+        height = p.get_height()
+        if not pd.isna(height) and height > 0:
+            ax.annotate(f'{height:.1f}', 
+                        (p.get_x() + p.get_width() / 2., height),
+                        ha='center', va='bottom', fontsize=10, fontweight='bold', 
+                        xytext=(0, 3), textcoords='offset points')
+
+    plt.legend(title='Model Architecture', loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=min(2, num_models))
+    
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'3_grouped_barplot_comparison_{file_suffix}.png'), dpi=300)
+    plt.savefig(os.path.join(output_dir, f'3_grouped_barplot_comparison_{file_suffix}.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
 if __name__ == '__main__':

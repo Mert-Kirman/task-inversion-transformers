@@ -8,84 +8,30 @@ class ReassembleDataset(Dataset):
         """
             X1, X2: Time vectors (N, time_len, 1)
             Y1, Y2: Forward and Inverse trajectories (N, time_len, d_y)
-            C: Context parameters (N, d_param)
+            C: Context parameters (N, d_param) - SPATIAL GOALS (Socket Positions) [avg_x, avg_y]
             valid_inverses: List of booleans indicating if Y2 is a paired trajectory
             time_len: Total length of the sequence
         """
-        # Mapping Object Name -> {Scalar ID, Paired Status}
-        # 'paired': True  => Train on Forward AND Inverse
-        # 'paired': False => Train on Forward ONLY (Mask Inverse)
         if "synthetic" not in data_dir:
-            self.object_config = {
-                # ==========================================
-                # PAIRED CATEGORIES (The Teachers)
-                # ==========================================
-                
-                # Category 1: Radially Symmetric 
-                'round_peg_1':  {'id': 0.0, 'paired': True,  'label': 'Round Peg 1'},
-                'round_peg_2':  {'id': 1.0, 'paired': True,  'label': 'Round Peg 2'},
-                'round_peg_3':  {'id': 2.0, 'paired': True,  'label': 'Round Peg 3'},
-                'round_peg_4':  {'id': 3.0, 'paired': True,  'label': 'Round Peg 4'},
-                
-                # Category 2: Meshing / Rotational
-                'small_gear':   {'id': 4.0, 'paired': True,  'label': 'Small Gear'},
-                'medium_gear':  {'id': 5.0, 'paired': True,  'label': 'Medium Gear'},
-                'large_gear':   {'id': 6.0, 'paired': True,  'label': 'Large Gear'},
-                
-                # Category 3: Asymmetric Connectors & Fasteners
-                'bnc':          {'id': 7.0, 'paired': True,  'label': 'BNC Connector'},
-                'bolt_4':       {'id': 8.0, 'paired': True,  'label': 'Bolt 4 / Nut'},
-                'd-sub':        {'id': 9.0, 'paired': True,  'label': 'D-SUB Connector'},
-                'ethernet':     {'id': 10.0, 'paired': True,  'label': 'Ethernet Connector'},
-                'waterproof':   {'id': 11.0, 'paired': True,  'label': 'Waterproof Connector'},
-
-                # ==========================================
-                # UNPAIRED CATEGORIES (Zero-Shot Targets)
-                # ==========================================
-                
-                # Zero-Shot Test 1: Corners & Edges (Highly Geometric, No Rotational Symmetry)
-                'square_peg_1': {'id': 12.0, 'paired': False, 'label': 'Square Peg 1 (Unpaired)'},
-                'square_peg_2': {'id': 13.0, 'paired': False, 'label': 'Square Peg 2 (Unpaired)'},
-                'square_peg_3': {'id': 14.0, 'paired': False, 'label': 'Square Peg 3 (Unpaired)'},
-                'square_peg_4': {'id': 15.0, 'paired': False, 'label': 'Square Peg 4 (Unpaired)'},
-                
-                # Zero-Shot Test 2: Highly Asymmetric Alien Shape
-                'usb':          {'id': 16.0, 'paired': False, 'label': 'USB Connector (Unpaired)'}
-            }
+            self.object_config = [
+                'round_peg_1', 'round_peg_2', 'round_peg_3', 'round_peg_4',
+                'small_gear', 'medium_gear', 'large_gear',
+                'bnc', 'bolt_4', 'd-sub', 'ethernet', 'waterproof',
+                'square_peg_1', 'square_peg_2', 'square_peg_3', 'square_peg_4', 'usb'
+            ]
         else:
-            self.object_config = {
-                'synthetic_obj_0': {'id': 0.0, 'paired': True,  'label': 'Synthetic Object 0'},
-                'synthetic_obj_1': {'id': 1.0, 'paired': True,  'label': 'Synthetic Object 1'},
-                'synthetic_obj_2': {'id': 2.0, 'paired': True,  'label': 'Synthetic Object 2'},
-                'synthetic_obj_3': {'id': 3.0, 'paired': True,  'label': 'Synthetic Object 3'},
-                'synthetic_obj_4': {'id': 4.0, 'paired': True,  'label': 'Synthetic Object 4'},
-                'synthetic_obj_5': {'id': 5.0, 'paired': True,  'label': 'Synthetic Object 5'},
-                'synthetic_obj_6': {'id': 6.0, 'paired': True,  'label': 'Synthetic Object 6'},
-                'synthetic_obj_7': {'id': 7.0, 'paired': True,  'label': 'Synthetic Object 7'},
-                'synthetic_obj_8': {'id': 8.0, 'paired': True,  'label': 'Synthetic Object 8'},
-                'synthetic_obj_9': {'id': 9.0, 'paired': False,  'label': 'Synthetic Object 9 (Unpaired)'},
-                'synthetic_obj_10': {'id': 10.0, 'paired': False,  'label': 'Synthetic Object 10 (Unpaired)'},
-                'synthetic_obj_11': {'id': 11.0, 'paired': False,  'label': 'Synthetic Object 11 (Unpaired)'},
-                'synthetic_obj_12': {'id': 12.0, 'paired': False,  'label': 'Synthetic Object 12 (Unpaired)'},
-                'synthetic_obj_13': {'id': 13.0, 'paired': True,  'label': 'Synthetic Object 13'},
-                'synthetic_obj_14': {'id': 14.0, 'paired': True,  'label': 'Synthetic Object 14'},
-                'synthetic_obj_15': {'id': 15.0, 'paired': False,  'label': 'Synthetic Object 15 (Unpaired)'},
-                'synthetic_obj_16': {'id': 16.0, 'paired': True,  'label': 'Synthetic Object 16'},
-            }
+            self.object_config = [f'synthetic_obj_{i}' for i in range(17)]
 
         # Lists to hold data from ALL objects
         all_Y1_list = []
         all_Y2_list = []
         all_C_list = []
-        all_valid_inverses = [] # Master list for valid_inverses
+        all_valid_inverses = [] 
 
-        print(f"Loading paired data from {data_dir}...")
+        print(f"Loading data from {data_dir} (Splitting Left/Right)...")
 
         # --- DATA LOADING LOOP ---
-        for obj_name, config in self.object_config.items():
-            obj_id = config['id']
-            is_paired = config['paired']
-            
+        for obj_name in self.object_config:
             obj_dir = os.path.join(data_dir, obj_name)
             insert_path = os.path.join(obj_dir, 'insert_all.npy')
             place_path = os.path.join(obj_dir, 'place_all.npy')
@@ -94,8 +40,7 @@ class ReassembleDataset(Dataset):
                 print(f"Warning: Could not find matched files for {obj_name} in {obj_dir}. Skipping.")
                 continue
             
-            print(f"  Processing {obj_name} (ID={obj_id}, Paired={is_paired})...")
-            
+            print(f"  Processing {obj_name}...")
             # Load arrays of dictionaries
             insert_data = np.load(insert_path, allow_pickle=True)
             place_data = np.load(place_path, allow_pickle=True)
@@ -114,27 +59,30 @@ class ReassembleDataset(Dataset):
             curr_Y1_np = np.stack(curr_Y1) # (N, Time, 3)
             curr_Y2_np = np.stack(curr_Y2) # (N, Time, 3)
 
-            # Create Context for this object
-            # 1. Geometric Context: (Insert_End_XY + Place_Start_XY) / 2
+            # Calculate Geometric Context (The Spatial Goal: (Insert_End_XY + Place_Start_XY) / 2)
             insert_ends_xy = curr_Y1_np[:, -1, :2]
             place_starts_xy = curr_Y2_np[:, 0, :2]
             geom_context = (insert_ends_xy + place_starts_xy) / 2.0 # (N, 2)
 
-            # 2. Object ID Context: Scalar value repeated for N
-            id_context = np.full((num_loaded, 1), obj_id) # (N, 1)
+            # TASK PARAMETER 
+            # Spatial Goal Configuration [avg_x, avg_y]
+            curr_C_np = geom_context # (N, 2)
 
-            # 3. Combined Context: [Avg_X, Avg_Y, Obj_ID]
-            curr_C_np = np.concatenate([geom_context, id_context], axis=1) # (N, 3)
+            # DYNAMIC SPATIAL SPLIT (Out-of-Distribution Logic)
+            # Assuming origin is 0,0,0:
+            # LEFT SIDE (X <= 0): Paired = True (Used for Training)
+            # RIGHT SIDE (X > 0): Paired = False (Used for Zero-Shot Extrapolation)
+            is_paired_array = (geom_context[:, 0] <= 0.0)
 
             # Append to master lists
             all_Y1_list.append(curr_Y1_np)
             all_Y2_list.append(curr_Y2_np)
             all_C_list.append(curr_C_np)
             
-            # Extend valid_inverses list
-            # If is_paired is False, we set valid_inverses=False for these indices
+            # Extend valid_inverses list with our dynamically calculated booleans
+            # If is_paired_array is False, we set valid_inverses=False for these indices
             # This tells the loss function to IGNORE Y2 for these demos
-            all_valid_inverses.extend([is_paired] * num_loaded)
+            all_valid_inverses.extend(is_paired_array.tolist())
 
         # --- AGGREGATE ---
         Y1 = torch.tensor(np.concatenate(all_Y1_list, axis=0), dtype=torch.float32)
@@ -146,7 +94,8 @@ class ReassembleDataset(Dataset):
         print(f"  Y1 (Forward): {Y1.shape}")
         print(f"  Y2 (Inverse): {Y2.shape}")
         print(f"  C  (Context): {C.shape}")
-        print(f"  valid_inverses count: {len(valid_inverses)} (True={sum(valid_inverses)}, False={len(valid_inverses)-sum(valid_inverses)})")
+        print(f"  Valid Inverses (Left Side - Train): {sum(valid_inverses)}")
+        print(f"  Masked Inverses (Right Side - Extrapolation Target): {len(valid_inverses)-sum(valid_inverses)}")
 
         num_demo = Y1.shape[0]
         time_len = Y1.shape[1]
@@ -173,7 +122,6 @@ class ReassembleDataset(Dataset):
         return self.d_N
 
     def __getitem__(self, idx):
-        # Grab the full sequences for the BERT Encoders
         x1_seq = self.X1[idx]
         x2_seq = self.X2[idx]
         y1_seq = self.Y1[idx]
